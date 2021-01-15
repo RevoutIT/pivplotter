@@ -47,11 +47,13 @@ public class Driver {
 	private double scale;
 	private Pair startPoint;
 	private Pair currentPoint;
-	private long waitTime;
 	
-	private long waitTimeDraw;
-	private long waitTimeNoDraw;
+	private long stepPauseDraw;
+	private long stepPauseSlack;
+	private long drawPause;
 
+	private long currentPause;
+	
 	private Pair motorLinks;
 	private Pair motorRechts;
 	
@@ -305,11 +307,13 @@ public class Driver {
 		if(isReady()) {
 			try {
 				if (paramDrawState == 0) {
+					currentPause = stepPauseSlack;
 					Gpio.pwmWrite(servoPin, penaway);
-					Thread.sleep(waitTimeNoDraw);
+					pause(drawPause);
 				} else {
+					currentPause = stepPauseDraw;
 					Gpio.pwmWrite(servoPin, pendraw);
-					Thread.sleep(waitTimeDraw);
+					pause(drawPause);
 				}
 			} catch (Exception exc) {
 				exc.printStackTrace();
@@ -395,9 +399,7 @@ public class Driver {
 		int maxStep = Integer.max(stepLeft, stepRight);
 
 		while (maxStep > 0) {
-			for (long i = 0; i < waitTime/2; i++) {
-				Math.sqrt(i);
-			}
+			pause(currentPause);
 			if (stepLeft > 0) {
 				stepLeft--;
 				Gpio.digitalWrite(PULLeft, true);
@@ -407,9 +409,7 @@ public class Driver {
 				stepRight--;
 				Gpio.digitalWrite(PULLRight, true);
 			}
-			for (long i = 0; i < waitTime/2; i++) {
-				Math.sqrt(i);
-			}
+			pause(currentPause);
 			Gpio.digitalWrite(PULLeft, false);
 			Gpio.digitalWrite(PULLRight, false);
 			maxStep--;
@@ -486,11 +486,11 @@ public class Driver {
 		maxY = minY + plotterSide[1];
 		lengthBetween = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.SPACEBETWEEN));
 		step = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.SECTORLENGTH));
-		waitTime = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.WAITTIME));
+		drawPause = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.DRAWPAUSE));
 		stepsPerMM = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPSPERMM));
 		startPoint = new Pair(Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STARTPOINTX)), Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STARTPOINTY)));
-		waitTimeDraw = (long) (Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.WAITTIMEDRAW))*1000);
-		waitTimeNoDraw = (long) (Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.WAITTIMENODRAW))*1000);
+		stepPauseDraw = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPPAUSEDRAW));
+		stepPauseSlack = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPPAUSESLACK));
 		currentPoint = new Pair(startPoint.getX(), startPoint.getY());
 		motorLinks = new Pair(0, 0);
 		motorRechts = new Pair(lengthBetween, 0);
@@ -517,6 +517,11 @@ public class Driver {
 
 	public Pair getStartPoint() {
 		return startPoint;
+	}
+	
+	private void pause(long paramMillis) {
+		long toTime = System.currentTimeMillis()+paramMillis;
+		while(toTime>System.currentTimeMillis());
 	}
 
 }
