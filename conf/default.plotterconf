@@ -5,9 +5,9 @@
 <entry key="stepspermm">160.4278074866310160427807486631</entry>
 <entry key="sectorlength">0.4</entry>
 
-<entry key="stepPauseDraw">100</entry>
-<entry key="stepPauseSlack">50</entry>
-<entry key="drawPause">500</entry>
+<entry key="steppausedraw">200</entry>
+<entry key="steppauseslack">100</entry>
+<entry key="drawpause">500000</entry>
 
 <entry key="plotterheight">600</entry>
 <entry key="plotterwidth">890</entry>
