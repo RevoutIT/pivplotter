@@ -519,9 +519,9 @@ public class Driver {
 		return startPoint;
 	}
 	
-	private void pause(long paramMillis) {
-		long toTime = System.currentTimeMillis()+paramMillis;
-		while(toTime>System.currentTimeMillis());
+	private void pause(long paramMicros) {
+		long toTime = System.nanoTime()+paramMicros*1000;
+		while(toTime>System.nanoTime());
 	}
 
 }
