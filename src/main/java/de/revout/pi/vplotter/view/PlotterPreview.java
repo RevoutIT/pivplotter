@@ -94,14 +94,14 @@ public class PlotterPreview extends JPanel{
 				VDPConverter vdpConverter = new VDPConverter(Model.getCurrent().getSectionList());
 				Driver.getCurrent().loadProperty();
 				Driver.getCurrent().plotte(vdpConverter.getData(), vdpConverter.getMaxWidth(), vdpConverter.getMaxHeight());
-				mainView.changePage(mainView.getPage3());
+				mainView.changePage(mainView.getLiveViewPanel());
 			}
 		});
 		
 		cancelButton.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
-				mainView.changePage(mainView.getPage1());
+				mainView.changePage(mainView.getFilterPanel());
 			}
 		});
 

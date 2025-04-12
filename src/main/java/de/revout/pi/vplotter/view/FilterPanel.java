@@ -91,7 +91,7 @@ public class FilterPanel extends JPanel implements Update {
 		JComboBox<String> jComboBox = new JComboBox<String>();
 
 		jComboBox.addItem("");
-		for (Filter filter : Model.getCurrent().getFilter()) {
+		for (Filter filter : Model.getCurrent().getFilters()) {
 			jComboBox.addItem(filter.getName());
 		}
 
@@ -101,7 +101,7 @@ public class FilterPanel extends JPanel implements Update {
 			public void actionPerformed(ActionEvent e) {
 				Filter filter = null;
 				if (jComboBox.getSelectedIndex() > 0) {
-					filter = Model.getCurrent().getFilter().get(jComboBox.getSelectedIndex() - 1).createNewFilter();
+					filter = Model.getCurrent().getFilters().get(jComboBox.getSelectedIndex() - 1).createNewFilter();
 					FilterBox filterBox = new FilterBox(filter, filterPanel);
 					createConstraintsFilterBox(filterBoxGridBagLayout, filterBox, 0, i, 1, 1);
 					jPanel.add(filterBox);
@@ -217,7 +217,7 @@ public class FilterPanel extends JPanel implements Update {
 						
 						if (Model.getCurrent().generateSVGFromBMP(potracePath,path)) {
 							mainView.previewImage();
-							mainView.changePage(mainView.getPage2());
+							mainView.changePage(mainView.getPreviewPanel());
 						}else {
 							JOptionPane.showConfirmDialog(mainView, Dictionary.getCurrent().getString("SVGConvert.ERROR"),
 									Dictionary.getCurrent().getString("ERROR"), JOptionPane.CLOSED_OPTION, //$NON-NLS-1$

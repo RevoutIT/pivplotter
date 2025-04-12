@@ -1,6 +1,5 @@
 package de.revout.pi.vplotter.view;
 
-import java.awt.Component;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
@@ -9,36 +8,40 @@ import javax.swing.JPanel;
 
 public class HomePage extends JPanel {
 
-	/**
-	 * 
-	 */
-	private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
 
-	public HomePage() {
-		GridBagLayout filterPanelBagLayout = new GridBagLayout();
-		setLayout(filterPanelBagLayout);
-
-		JPanel leftPanel = new JPanel();
-		leftPanel.setBackground(MainView.COLOR1);
-		createConstraints(filterPanelBagLayout, leftPanel, 0, 0, 3, 1);
-
-		JPanel rightPanel = new JPanel();
-		rightPanel.setBackground(MainView.COLOR2);
-		createConstraints(filterPanelBagLayout, rightPanel, 1, 0, 1, 1);
-
-		add(leftPanel);
-		add(rightPanel);
-	}
-
-	private void createConstraints(GridBagLayout paramBagLayout, Component paramComponent, int paramx, int paramy,
-			double paramWeightx, double paramWeighty) {
-		GridBagConstraints constraintsRight = new GridBagConstraints();
-		constraintsRight.insets = new Insets(5, 5, 5, 5);
-		constraintsRight.gridx = paramx;
-		constraintsRight.gridy = paramy;
-		constraintsRight.weightx = paramWeightx;
-		constraintsRight.weighty = paramWeighty;
-		constraintsRight.fill = GridBagConstraints.BOTH;
-		paramBagLayout.setConstraints(paramComponent, constraintsRight);
-	}
+    public HomePage() {
+        // Setzt den GridBagLayout als Layoutmanager der HomePage
+        setLayout(new GridBagLayout());
+        
+        // Linkes Panel
+        JPanel leftPanel = new JPanel();
+        leftPanel.setBackground(MainView.COLOR1);
+        add(leftPanel, createGbc(0, 0, 3, 1));
+        
+        // Rechtes Panel
+        JPanel rightPanel = new JPanel();
+        rightPanel.setBackground(MainView.COLOR2);
+        add(rightPanel, createGbc(1, 0, 1, 1));
+    }
+    
+    /**
+     * Erstellt und konfiguriert GridBagConstraints.
+     * 
+     * @param gridx   Die Spaltenposition im GridBagLayout.
+     * @param gridy   Die Zeilenposition im GridBagLayout.
+     * @param weightx Das Gewicht zur Verteilung extra horizontalen Raumes.
+     * @param weighty Das Gewicht zur Verteilung extra vertikalen Raumes.
+     * @return Konfiguriertes GridBagConstraints-Objekt.
+     */
+    private GridBagConstraints createGbc(int gridx, int gridy, double weightx, double weighty) {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = gridx;
+        gbc.gridy = gridy;
+        gbc.weightx = weightx;
+        gbc.weighty = weighty;
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.insets = new Insets(5, 5, 5, 5);
+        return gbc;
+    }
 }

@@ -11,7 +11,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 
-import com.pi4j.wiringpi.Gpio;
+import com.pi4j.Pi4J;
+import com.pi4j.context.Context;
+import com.pi4j.io.gpio.digital.DigitalOutput;
+import com.pi4j.io.gpio.digital.DigitalState;
 
 import de.revout.pi.vplotter.converter.Pair;
 import de.revout.pi.vplotter.saves.SettingsManager;
@@ -20,508 +23,562 @@ import de.revout.pi.vplotter.saves.VPlotterPropertiesManager.KEY;
 
 public class Driver {
 
-	private int ENALeft;
-	private int ENARight;
-	private int DIRLeft;
-	private int DIRRight;
-	private int PULLeft;
-	private int PULLRight;
-	private int servoPin;
-	private int penaway;
-	private int pendraw;
+    // GPIO-Pin-Konfiguration
+    private int ENALeft;
+    private int ENARight;
+    private int DIRLeft;
+    private int DIRRight;
+    private int PULLeft;
+    private int PULLRight;
+    private float penaway;
+    private float pendraw;
+    
+    private float servoCurrentPosition=-1;
 
-	private final static int RANGE = 20; 
-	private double minX;
-	private double minY;
-	private double maxX;
-	private double maxY;
-	private double paperHeight;
-	private double paperWidth;
-	private double x;
-	private double y; 
-	private double[] plotterSide = new double[2];
-	private int lastDraw;
-	private double lengthBetween;
-	private double step;
-	private double stepsPerMM;
-	private double scale;
-	private Pair startPoint;
-	private Pair currentPoint;
-	
-	private long stepPauseDraw;
-	private long stepPauseSlack;
-	private long drawPause;
+    private final static int RANGE = 20;
 
-	private long currentPause;
-	
-	private Pair motorLinks;
-	private Pair motorRechts;
-	
-	private boolean gpio = false;
-	private static Driver current;
+    // Plotter-Parameter
+    private double minX;
+    private double minY;
+    private double maxX;
+    private double maxY;
+    private double paperHeight;
+    private double paperWidth;
+    // Offsets zur Zentrierung
+    private double offsetX;
+    private double offsetY;
+    private double[] plotterSide = new double[2];
+    private int lastDraw;
+    private double lengthBetween;
+    private double step;
+    private double stepsPerMM;
+    private double scale;
+    private Pair startPoint;
+    private Pair currentPoint;
 
-	private boolean simulation = false;
+    private long stepPauseDraw;
+    private long stepPauseSlack;
+    private long currentPause;
 
-	private boolean pause;
-	private boolean stop;
-	
-	private boolean used = false;
+    private Pair motorLinks;
+    private Pair motorRechts;
 
-	private ArrayList<DriverMoveObserverIf> observerList;
+    private boolean gpio = false;
+    private static Driver current;
 
-	private boolean init;
+    private boolean simulation = false;
+    private boolean pause;
+    private boolean stop;
+    private boolean used = false;
+    
+    private ArrayList<DriverMoveObserverIf> observerList;
+    private boolean init;
 
-	public static Driver getCurrent() {
-		if (current == null) {
-			current = new Driver();
-		}
-		return current;
-		
-	}
+    // Globaler Pi4J-Kontext – wird beim Start der Anwendung initialisiert
+    private Context pi4j;
 
-	private Driver() {
-		setGpioSetting();
-		init = false;
+    private ServoMotor servoMotor;
 
-		pause = false;
-		stop = false;
+    // Digitale Ausgänge
+    private DigitalOutput enaLeftOutput;
+    private DigitalOutput enaRightOutput;
+    private DigitalOutput dirLeft;
+    private DigitalOutput dirRight;
+    private DigitalOutput pulLeft;
+    private DigitalOutput pulRight;
 
-		// Letzer Status des Stiftes
-		lastDraw = 2;
-		// Scale
-		scale = 0;
+    public static Driver getCurrent() {
+        if (current == null) {
+            current = new Driver();
+        }
+        return current;
+    }
 
-		observerList = new ArrayList<>();
+    private Driver() {
+        setGpioSetting();
+        init = false;
+        pause = false;
+        stop = false;
+        // Letzter Status des Stiftes (2 als Initialwert)
+        lastDraw = 2;
+        scale = 0;
+        observerList = new ArrayList<>();
+    }
 
-	}
+    private void setGpioSetting() {
+        Path path = Paths.get("conf/gpio.properties");
+        if (Files.exists(path)) {
+            try (InputStream inputStream = Files.newInputStream(path)) {
+                Properties properties = new Properties();
+                properties.loadFromXML(inputStream);
+                ENALeft = Integer.parseInt(properties.getProperty("ENALEFT"));
+                ENARight = Integer.parseInt(properties.getProperty("ENARIGHT"));
+                DIRLeft = Integer.parseInt(properties.getProperty("DIRLEFT"));
+                DIRRight = Integer.parseInt(properties.getProperty("DIRRIGHT"));
+                PULLeft = Integer.parseInt(properties.getProperty("PULLEFT"));
+                PULLRight = Integer.parseInt(properties.getProperty("PULLRIGHT"));
+                penaway = Integer.parseInt(properties.getProperty("PENAWAY"));
+                pendraw = Integer.parseInt(properties.getProperty("PENDRAW"));
+            } catch (Exception e) {
+                throw new RuntimeException(path.toString() + " Error:" + e.getMessage());
+            }
+            if (pi4j == null) {
+                pi4j = Pi4J.newAutoContext();
+            }
+        } else {
+            throw new RuntimeException(path.toString() + " not found!");
+        }
+    }
 
-	
-	private void setGpioSetting() {
-		Path path = Paths.get("conf/gpio.properties");
-		if (Files.exists(path)) {
-			try(InputStream inputStream = Files.newInputStream(path)) {
-				Properties properties= new Properties();
-				properties.loadFromXML(inputStream);
-				ENALeft=Integer.parseInt(properties.getProperty("ENALEFT"));
-				ENARight=Integer.parseInt(properties.getProperty("ENARIGHT"));
-				DIRLeft=Integer.parseInt(properties.getProperty("DIRLEFT"));
-				DIRRight=Integer.parseInt(properties.getProperty("DIRRIGHT"));
-				PULLeft=Integer.parseInt(properties.getProperty("PULLEFT"));
-				PULLRight=Integer.parseInt(properties.getProperty("PULLRIGHT"));
-				servoPin=Integer.parseInt(properties.getProperty("SERVOPIN"));
-				penaway=Integer.parseInt(properties.getProperty("PENAWAY"));
-				pendraw=Integer.parseInt(properties.getProperty("PENDRAW"));
-			} catch (Exception e) {
-				throw new RuntimeException(path.toString()+" Error:"+e.getMessage());
-			}
-		}else {
-			throw new RuntimeException(path.toString()+" not found!");
-		}
-	}
+    /**
+     * Führt einen Testlauf durch, indem Testdaten erzeugt und geplottet werden.
+     */
+    public void test() {
+        List<String> testData = new ArrayList<>();
+        loadProperty();
+        testData.add("0,0,0");
+        testData.add("1,0," + plotterSide[1]);
+        testData.add("1," + plotterSide[0] + "," + plotterSide[1]);
+        testData.add("1," + plotterSide[0] + ",0");
+        testData.add("1,0,0");
+        testData.add("1," + plotterSide[0] + "," + plotterSide[1]);
+        testData.add("0," + plotterSide[0] + ",0");
+        testData.add("1,0," + plotterSide[1]);
+        plotte(testData, plotterSide[0], plotterSide[1]);
+    }
 
-	public void test() {
-		List<String> testData = new ArrayList<>();
-		loadProperty();
-		testData.add("0,0,0"); //$NON-NLS-1$
-		testData.add("1,0,"+plotterSide[1]); //$NON-NLS-1$
-		testData.add("1,"+plotterSide[0]+","+plotterSide[1]); //$NON-NLS-1$ //$NON-NLS-2$
-		testData.add("1,"+plotterSide[0]+",0"); //$NON-NLS-1$ //$NON-NLS-2$
-		testData.add("1,0,0"); //$NON-NLS-1$
-		testData.add("1,"+plotterSide[0]+","+plotterSide[1]); //$NON-NLS-1$ //$NON-NLS-2$
-		testData.add("0,"+plotterSide[0]+",0"); //$NON-NLS-1$ //$NON-NLS-2$
-		testData.add("1,0,"+plotterSide[1]); //$NON-NLS-1$
-		plotte(testData, plotterSide[0], plotterSide[1]);
-	}
-	
-	
-	public void plotte(List<String> paramList, double paramWidth, double paramHeight) {
-		if(!simulation) {
-			if(!gpioInit()) {
-				return;
-			}
-		}
-		for (DriverMoveObserverIf driverMoveObserverIf : observerList) {
-			driverMoveObserverIf.init();
-		}
-		motorsOn();
-		stop = false;
-		pause = false;
+    /**
+     * Startet einen neuen Plot-Prozess, der eine Liste von Zeichenbefehlen (als CSV-Strings) abarbeitet.
+     *
+     * @param commands Liste der Befehle im Format "drawState,x,y"
+     * @param width    Breite des Plotterbereichs
+     * @param height   Höhe des Plotterbereichs
+     */
+    public void plotte(List<String> commands, double width, double height) {
+        if (!simulation && !gpioInit()) {
+            return;
+        }
+        observerList.forEach(DriverMoveObserverIf::init);
+        motorsOn();
+        stop = false;
+        pause = false;
 
-		new Thread(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					
-					String[] split;
-					scale = calculateScale(paramWidth, paramHeight);
-					for (int i = 0; i < paramList.size(); i++) {
+        new Thread(() -> {
+            try {
+                scale = calculateScale(width, height);
+                for (int i = 0; i < commands.size(); i++) {
+                	final int commandIndex = i;
+                    // Bei Pause schrittweise warten
+                    while (pause) {
+                        if (stop) return;
+                        Thread.sleep(1000);
+                    }
+                    String[] parts = commands.get(i).split(",");
+                    int drawState = Integer.parseInt(parts[0]);
+                    if (lastDraw != drawState) {
+                        draw(drawState);
+                    }
+                    // Umrechnung der Koordinaten unter Berücksichtigung der Skalierung und des Versatzes
+                    Pair toPoint = new Pair((Double.parseDouble(parts[1]) / scale) + minX,
+                                             (Double.parseDouble(parts[2]) / scale) + minY);
+                    ArrayList<Pair> pathPoints = getPathPoints(currentPoint, toPoint);
+                    for (Pair point : pathPoints) {
+                        if (isInRange(point)) {
+                            Pair diff = getDifferences(currentPoint, point);
+                            Pair driveDelta = move(diff);
+                            calculateRealCurrentPosition(driveDelta);
+                        }
+                    }
+                    observerList.forEach(observer ->
+                        observer.currentMove(drawState, currentPoint, commands.size(), commandIndex)
+                    );
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                finish();
+            }
+        }).start();
+    }
 
-						while (pause) {
-							if (stop) {
-								return;
-							}
-							Thread.sleep(1000);
-						}
-						split = paramList.get(i).split(","); //$NON-NLS-1$
-						int drawState = Integer.parseInt(split[0]);
-						if (lastDraw != drawState) {
-							draw(drawState);
-						}
+    private boolean gpioInit() {
+        if (!init) {
+            init = gpioStart();
+        }
+        return init;
+    }
 
-						Pair toPoint = new Pair((Double.parseDouble(split[1]) / scale) + minX,
-								(Double.parseDouble(split[2]) / scale) + minY);
+    /**
+     * Berechnet anhand der Verschiebungsdifferenz die neue aktuelle Position.
+     */
+    private void calculateRealCurrentPosition(Pair driveDelta) {
+        double leftBefore = getDistance(motorLinks, currentPoint);
+        double rightBefore = getDistance(motorRechts, currentPoint);
+        double leftAfter = leftBefore + driveDelta.getX();
+        double rightAfter = rightBefore + driveDelta.getY();
+        double cosAlpha = (Math.pow(lengthBetween, 2) + Math.pow(leftAfter, 2) - Math.pow(rightAfter, 2))
+                          / (2 * lengthBetween * leftAfter);
+        double newX = cosAlpha * leftAfter;
+        double newY = Math.sqrt(Math.max(0, Math.pow(leftAfter, 2) - Math.pow(newX, 2)));
+        currentPoint.setX(newX);
+        currentPoint.setY(newY);
+    }
 
-						ArrayList<Pair> pathPoints = getPathPoints(currentPoint, toPoint);
+    /**
+     * Bewegt den Plotter zum angegebenen Zielpunkt.
+     */
+    public void goTo(Pair targetPosition) {
+        if (isReady()) {
+            draw(0);
+            Pair diff = getDifferences(currentPoint, targetPosition);
+            Pair driveDelta = move(diff);
+            calculateRealCurrentPosition(driveDelta);
+        }
+    }
 
-						for (Pair pathPoint : pathPoints) {
-							if (isInRange(pathPoint)) {
-								Pair diff = getDifferences(currentPoint, pathPoint);
-								Pair driveDelta = move(diff);
-								calculateRealCurrentPosition(driveDelta);
-							}
-						}
-						for (DriverMoveObserverIf driverMoveObserverIf : observerList) {
-							driverMoveObserverIf.currentMove(drawState, currentPoint, paramList.size(), i);
-						}
-						
-					}
-				} catch (Exception exc) {
-					exc.printStackTrace();
-				} finally {
-					finish();
-				}
-			}
+    /**
+     * Nach Abschluss des Plottens wird der Stift zur Ausgangsposition gefahren
+     * und alle registrierten Beobachter werden informiert.
+     */
+    private void finish() {
+        used = true;
+        goTo(startPoint);
+        observerList.forEach(DriverMoveObserverIf::finish);
+    }
 
-		}).start();
-	}
+    // --- GPIO/Servosteuerung ---
 
-	private boolean gpioInit() {
-		if (!init) {
-			init = gpioStart();
-		}
-		return init;
-	}
+    private boolean gpioStart() {
+        if (!simulation) {
+            try {
+                enaLeftOutput = createDigitalOutput(pi4j, ENALeft);
+                enaRightOutput = createDigitalOutput(pi4j, ENARight);
+                dirLeft = createDigitalOutput(pi4j, DIRLeft);
+                dirRight = createDigitalOutput(pi4j, DIRRight);
+                pulLeft = createDigitalOutput(pi4j, PULLeft);
+                pulRight = createDigitalOutput(pi4j, PULLRight);
+                servoMotor = new ServoMotor(pi4j, 2, 50, -90.0f, 90.0f, 2.0f, 12f);
+                gpio = true;
+            } catch (Throwable exc) {
+                gpio = false;
+                simulation = true;
+                exc.printStackTrace();
+            }
+        }
+        return gpio;
+    }
 
-	private void calculateRealCurrentPosition(Pair driveDelta) {
-		double lengtLeftFrom = getLenght(motorLinks, currentPoint);
-		double lengtRightFrom = getLenght(motorRechts, currentPoint);
-		double lengtLeftAftermove = lengtLeftFrom + driveDelta.getX();
-		double lengtRightAftermove = lengtRightFrom + driveDelta.getY();
-		double cosAlpha = (Math.pow(lengthBetween, 2) + Math.pow(lengtLeftAftermove, 2)
-				- Math.pow(lengtRightAftermove, 2)) / (2 * lengthBetween * lengtLeftAftermove);
-		double x = cosAlpha * lengtLeftAftermove;
-		double y = Math.sqrt(Math.pow(lengtLeftAftermove, 2) - Math.pow(x, 2));
-		currentPoint.setX(x);
-		currentPoint.setY(y);
-	}
-	
-	public void goTo(Pair paramPosition) {
-		if(isReady()) {
-			draw(0);
-			Pair diff = getDifferences(currentPoint, paramPosition);
-			Pair driveDelta = move(diff);
-			calculateRealCurrentPosition(driveDelta);
-		}
-	}
+    public void motorsOff() {
+        if (!simulation && gpioInit()) {
+            enaLeftOutput.high();
+            enaRightOutput.high();
+        }
+        pause = true;
+        stop();
+    }
 
-	private void finish() {
-		used=true;
-		goTo(startPoint);
-		for (DriverMoveObserverIf driverMoveObserverIf : observerList) {
-			driverMoveObserverIf.finish();
-		}
-	}
-	
+    public void motorsOn() {
+        if (!simulation && gpioInit()) {
+            enaLeftOutput.low();
+            enaRightOutput.low();
+        }
+    }
 
-	// Pins initialisieren
-	private boolean gpioStart() {
-		if (!simulation) {
-			try {
-				Gpio.wiringPiSetupGpio();
-				Gpio.pinMode(servoPin, Gpio.PWM_OUTPUT);
-				Gpio.pwmSetMode(Gpio.PWM_MODE_MS);
-				Gpio.pwmSetClock(384);
-				Gpio.pwmSetRange(1000);
-				Gpio.pinMode(ENALeft, Gpio.OUTPUT);
-				Gpio.digitalWrite(ENALeft, false);
-				Gpio.pinMode(ENARight, Gpio.OUTPUT);
-				Gpio.digitalWrite(ENARight, false);
-				Gpio.pinMode(DIRLeft, Gpio.OUTPUT);
-				Gpio.digitalWrite(DIRLeft, true);
-				Gpio.pinMode(DIRRight, Gpio.OUTPUT);
-				Gpio.digitalWrite(DIRRight, true);
-				Gpio.pinMode(PULLeft, Gpio.OUTPUT);
-				Gpio.digitalWrite(PULLeft, false);
-				Gpio.pinMode(PULLRight, Gpio.OUTPUT);
-				Gpio.digitalWrite(PULLRight, false);
-				gpio=true;
-			}catch(Throwable exc) {
-				gpio=false;
-				simulation=true;
-			}
-		}
-		return gpio;
-		
-	}
-	
-	public void motorsOff() {
-		if(!simulation) {
-			if(gpioInit()) {
-				Gpio.digitalWrite(ENALeft, true);
-				Gpio.digitalWrite(ENARight, true);
-			}
-		}
-		pause=true;
-		stop();
-	}
-	
-	public void motorsOn() {
-		if(!simulation) {
-			if(gpioInit()) {
-				Gpio.digitalWrite(ENALeft, false);
-				Gpio.digitalWrite(ENARight, false);
-			}
-		}
-	}
+    public void penAway() {
+        if (!simulation && gpioInit()) {
+        	smoothMoveServo(penaway,0.1f,50);
+        }
+    }
 
-	public void gpioStop() {
-		if(isReady()) {
-			try {
-				if(gpioInit()) {
-					Gpio.digitalWrite(ENALeft, false);
-					Gpio.digitalWrite(ENARight, false);
-				}
-			} catch (Exception e) {
+    public void penDraw() {
+        if (!simulation && gpioInit()) {
+        	smoothMoveServo(pendraw,0.1f,50);
+        }
+    }
+    
+    /**
+     * Ändert den Winkel des Servomotors langsam von der aktuellen Position zum Zielwinkel.
+     * 
+     * @param currentPosition Der aktuelle Winkel des Servomotors.
+     * @param targetAngle     Der Zielwinkel, den der Servo erreichen soll.
+     * @param stepSize        Die Größe der einzelnen Winkeländerungsschritte.
+     * @param pauseMillis     Die Pause in Millisekunden zwischen den einzelnen Schritten.
+     */
+    private void smoothMoveServo(float targetAngle, float stepSize, long pauseMillis) {
+        // Berechne die Richtung (+1 oder -1)
+        float direction = targetAngle > servoCurrentPosition ? 1.0f : -1.0f;
+        float newPosition = servoCurrentPosition;
+        
+        // Solange der aktuelle Winkel noch nicht das Ziel erreicht hat,
+        // wird in kleinen Schritten der Winkel geändert.
+        while ((direction > 0 && newPosition < targetAngle) || (direction < 0 && newPosition > targetAngle)) {
+            newPosition += stepSize * direction;
+            
+            // Überschreiten des Zielwinkels verhindern
+            if ((direction > 0 && newPosition > targetAngle) || (direction < 0 && newPosition < targetAngle)) {
+                newPosition = targetAngle;
+            }
+            
+            // Setzt den aktuellen Winkel am Servo – hier wird angenommen,
+            // dass 'servoMotor' eine Instanz des ServoMotor ist und setPercent(float) den Winkel setzt.
+            servoMotor.setAngle(newPosition);
+            
+            // Falls die aktuelle Position in einer Instanzvariable gespeichert werden soll:
+            servoCurrentPosition = newPosition;
+            
+            try {
+                Thread.sleep(pauseMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+    }
+    
+    
 
-			}
-		}
-	}
+    public void gpioStop() {
+        if (isReady()) {
+            try {
+                if (gpioInit()) {
+                    enaLeftOutput.low();
+                    enaRightOutput.low();
+                }
+            } catch (Exception e) {
+                // Fehler ignorieren
+            }
+        }
+    }
 
-	// Skalierung berechnen
-	private double calculateScale(double paramWidth, double paramHeight) {
-		return Double.max(paramWidth / plotterSide[0], paramHeight / plotterSide[1]);
-	}
+    // --- Berechnung und Hilfsmethoden ---
 
-	// Servo bewegen, um den Malstatus zu �ndern
-	private void draw(int paramDrawState) {
-		if(isReady()) {
-			try {
-				if (paramDrawState == 0) {
-					currentPause = stepPauseSlack;
-					Gpio.pwmWrite(servoPin, penaway);
-					pause(drawPause);
-				} else {
-					currentPause = stepPauseDraw;
-					Gpio.pwmWrite(servoPin, pendraw);
-					pause(drawPause);
-				}
-			} catch (Exception exc) {
-				exc.printStackTrace();
-			}
-		}
+    // Berechnet den Skalierungsfaktor, um den Plotterbereich in den vorgegebenen Maßen abzubilden.
+    private double calculateScale(double width, double height) {
+        return Double.max(width / plotterSide[0], height / plotterSide[1]);
+    }
 
-		lastDraw = paramDrawState;
-	}
-	
-	public void showPageLocation() {
-		List<String> testData = new ArrayList<>();
-		loadProperty();
-		minX=minX-x;
-		minY=minY-y;
-		testData.add("0,15,0"); //$NON-NLS-1$
-		testData.add("1,0,0"); //$NON-NLS-1$
-		testData.add("1,0,15"); //$NON-NLS-1$
-		testData.add("0,"+(paperWidth-15)+",0"); //$NON-NLS-1$
-		testData.add("1,"+paperWidth+",0"); //$NON-NLS-1$
-		plotte(testData,paperWidth, paperHeight);
-	}
+    // Bewegt den Stift (über den Servo), um den Zeichenstatus zu ändern.
+    private void draw(int drawState) {
+        if (isReady()) {
+            try {
+                if (drawState == 0) {
+                    currentPause = stepPauseSlack;
+                    penAway();
+                } else {
+                    currentPause = stepPauseDraw;
+                    penDraw();
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        lastDraw = drawState;
+    }
 
+    public void showPageLocation() {
+        List<String> testData = new ArrayList<>();
+        loadProperty();
+        // Offset-Anpassungen
+        minX -= offsetX;
+        minY -= offsetY;
+        testData.add("0,15,0");
+        testData.add("1,0,0");
+        testData.add("1,0,15");
+        testData.add("0," + (paperWidth - 15) + ",0");
+        testData.add("1," + paperWidth + ",0");
+        plotte(testData, paperWidth, paperHeight);
+    }
 
-	// Pr�fen, ob der Punkt noch innerhalb des Maximalen der Motoren ist
-	private boolean isInRange(Pair paramPoint) {
-		if (paramPoint.getX() < (minX-RANGE) || paramPoint.getX() > (maxX+RANGE) || paramPoint.getY() < (minY-RANGE)
-				|| paramPoint.getY() > (maxY+RANGE)) {
-			return false;
-		}
-		return true;
-	}
+    // Prüft, ob der gegebene Punkt noch innerhalb des erlaubten Bereichs liegt.
+    private boolean isInRange(Pair point) {
+        return !(point.getX() < (minX - RANGE) || point.getX() > (maxX + RANGE) ||
+                 point.getY() < (minY - RANGE) || point.getY() > (maxY + RANGE));
+    }
 
-	// Ben�tigte ver�nderung berechnen, um von einem Punkt zu einem andere Punkt zu
-	// bewegen
-	private Pair getDifferences(Pair paramCurrentPoint, Pair paramToPoint) {
-		double lengthDifferenceLeft = getLenght(motorLinks, paramToPoint) - getLenght(motorLinks, paramCurrentPoint);
-		double lengthDifferenceRight = getLenght(motorRechts, paramToPoint) - getLenght(motorRechts, paramCurrentPoint);
-		return new Pair(lengthDifferenceLeft, lengthDifferenceRight);
-	}
+    // Berechnet den Unterschied der Seillängen (links und rechts) zwischen zwei Punkten.
+    private Pair getDifferences(Pair currentPoint, Pair targetPoint) {
+        double leftDiff = getDistance(motorLinks, targetPoint) - getDistance(motorLinks, currentPoint);
+        double rightDiff = getDistance(motorRechts, targetPoint) - getDistance(motorRechts, currentPoint);
+        return new Pair(leftDiff, rightDiff);
+    }
 
-	// L�nge zwischen zwei Punkten berechnen
-	private double getLenght(Pair currentPoint, Pair toPoint) {
-		return Math.sqrt(Math.pow((toPoint.getY() - currentPoint.getY()), 2)
-				+ Math.pow(toPoint.getX() - currentPoint.getX(), 2));
-	}
+    // Berechnet die Distanz zwischen zwei Punkten.
+    private double getDistance(Pair a, Pair b) {
+        double dx = b.getX() - a.getX();
+        double dy = b.getY() - a.getY();
+        return Math.sqrt(dx * dx + dy * dy);
+    }
 
-	/**
-	 * @param paramPair
-	 * @return Liefert die tats�chliche �nderung der Seilen (links und rechts)
-	 */
-	private Pair move(Pair paramPair) {
-		
-		int stepLeft = getSteps(paramPair.getX());
-		int stepRight = getSteps(paramPair.getY());
+    /**
+     * Führt die physische Bewegung durch, indem die Differenz in Schritte umgerechnet und die
+     * entsprechenden Signale an die Motoren gesendet werden.
+     *
+     * @param diff Differenz in den Seillängen (links und rechts)
+     * @return Die tatsächlich gefahrenen Delta-Werte
+     */
+    private Pair move(Pair diff) {
+        int stepLeft = getSteps(diff.getX());
+        int stepRight = getSteps(diff.getY());
+        double leftDelta = stepLeft / stepsPerMM;
+        double rightDelta = stepRight / stepsPerMM;
+        if (diff.getX() < 0) {
+            leftDelta *= -1;
+        }
+        if (diff.getY() < 0) {
+            rightDelta *= -1;
+        }
+        Pair result = new Pair(leftDelta, rightDelta);
+        if (simulation) {
+            return result;
+        }
+        // Setzt die Fahrtrichtung
+        if (diff.getX() > 0) {
+            dirLeft.low();
+        } else {
+            dirLeft.high();
+        }
+        if (diff.getY() > 0) {
+            dirRight.high();
+        } else {
+            dirRight.low();
+        }
+        int maxSteps = Math.max(stepLeft, stepRight);
+        while (maxSteps > 0) {
+            pause(currentPause);
+            if (stepLeft > 0) {
+                stepLeft--;
+                pulLeft.high();
+            }
+            if (stepRight > 0) {
+                stepRight--;
+                pulRight.high();
+            }
+            pause(currentPause);
+            pulLeft.low();
+            pulRight.low();
+            maxSteps--;
+        }
+        return result;
+    }
 
-		double leftDelta = ((double) stepLeft) / stepsPerMM;
-		double rightDelta = ((double) stepRight) / stepsPerMM;
+    // Berechnet die Anzahl der Schritte, die für eine gegebene Strecke notwendig sind.
+    private int getSteps(double diff) {
+        return new BigDecimal(Math.abs(diff * stepsPerMM))
+                   .setScale(0, RoundingMode.HALF_UP)
+                   .intValue();
+    }
 
-		if (paramPair.getX() < 0) {
-			leftDelta *= -1;
-		}
-		if (paramPair.getY() < 0) {
-			rightDelta *= -1;
-		}
+    // Erzeugt Zwischenpunkte entlang einer Strecke, um eine glattere Bewegung zu ermöglichen.
+    private ArrayList<Pair> getPathPoints(Pair currentPoint, Pair targetPoint) {
+        ArrayList<Pair> pathPoints = new ArrayList<>();
+        double distance = getDistance(currentPoint, targetPoint);
+        double path = step;
+        while (path < distance) {
+            pathPoints.add(calculatePoint(path, currentPoint, targetPoint));
+            path += step;
+        }
+        pathPoints.add(targetPoint);
+        return pathPoints;
+    }
 
-		Pair result = new Pair(leftDelta, rightDelta);
+    // Berechnet einen Punkt auf der Strecke zwischen currentPoint und targetPoint bei gegebener Entfernung.
+    private Pair calculatePoint(double path, Pair currentPoint, Pair targetPoint) {
+        double totalDistance = getDistance(currentPoint, targetPoint);
+        if (totalDistance == 0) {
+            return currentPoint;
+        }
+        double dx = (targetPoint.getX() - currentPoint.getX()) * path / totalDistance;
+        double dy = (targetPoint.getY() - currentPoint.getY()) * path / totalDistance;
+        return new Pair(currentPoint.getX() + dx, currentPoint.getY() + dy);
+    }
 
-		if (simulation) {
-			return result;
-		}
+    public void addDriverMoveObserverIf(DriverMoveObserverIf observer) {
+        observerList.add(observer);
+    }
 
-		if (paramPair.getX() > 0) {
-			Gpio.digitalWrite(DIRLeft, false);
-		} else {
-			Gpio.digitalWrite(DIRLeft, true);
-		}
-		if (paramPair.getY() > 0) {
-			Gpio.digitalWrite(DIRRight, true);
-		} else {
-			Gpio.digitalWrite(DIRRight, false);
-		}
+    public void setPause(boolean pause) {
+        this.pause = pause;
+    }
 
-		int maxStep = Integer.max(stepLeft, stepRight);
+    public void stop() {
+        stop = true;
+    }
 
-		while (maxStep > 0) {
-			pause(currentPause);
-			if (stepLeft > 0) {
-				stepLeft--;
-				Gpio.digitalWrite(PULLeft, true);
-			}
+    public void setSimulation(boolean simulation) {
+        this.simulation = simulation;
+    }
 
-			if (stepRight > 0) {
-				stepRight--;
-				Gpio.digitalWrite(PULLRight, true);
-			}
-			pause(currentPause);
-			Gpio.digitalWrite(PULLeft, false);
-			Gpio.digitalWrite(PULLRight, false);
-			maxStep--;
-		}
-		return result;
-	}
+    /**
+     * Lädt Konfigurationen aus der Plotter-Konfigurationsdatei und aktualisiert interne Parameter.
+     */
+    public void loadProperty() {
+        String configFile = SettingsManager.getCurrent().getValue(SettingsManager.KEY.CONFIG);
+        if (configFile == null) {
+            configFile = "conf/default.plotterconf";
+        }
+        File file = new File(configFile);
+        if (file.exists()) {
+            VPlotterPropertiesManager.getCurrent().load(file);
+        }
+        paperHeight = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.PAPERHEIGHT));
+        paperWidth = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.PAPERWIDTH));
+        minX = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.MINX));
+        minY = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.MINY));
+        plotterSide[0] = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.PLOTTERWIDTH));
+        plotterSide[1] = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.PLOTTERHEIGHT));
+        maxX = minX + plotterSide[0];
+        maxY = minY + plotterSide[1];
+        lengthBetween = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.SPACEBETWEEN));
+        step = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.SECTORLENGTH));
+        stepsPerMM = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPSPERMM));
+        startPoint = new Pair(
+                Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STARTPOINTX)), 
+                Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STARTPOINTY))
+        );
+        stepPauseDraw = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPPAUSEDRAW));
+        stepPauseSlack = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPPAUSESLACK));
+        currentPoint = new Pair(startPoint.getX(), startPoint.getY());
+        motorLinks = new Pair(0, 0);
+        motorRechts = new Pair(lengthBetween, 0);
+        // Berechne Offsets zur Zentrierung des Plotterbereichs
+        offsetX = (paperWidth - plotterSide[0]) / 2;
+        offsetY = (paperHeight - plotterSide[1]) / 2;
+    }
 
-	// Schritte berechnen, die f�r eine Strecke notwendig sind
-	private int getSteps(double paramDifference) {
-		return new BigDecimal(Math.abs(paramDifference * stepsPerMM)).setScale(0, RoundingMode.HALF_UP).intValue();
-	}
+    private DigitalOutput createDigitalOutput(Context pi4j, int pin) {
+        var config = DigitalOutput.newConfigBuilder(pi4j)
+                        .address(pin)
+                        .shutdown(DigitalState.LOW)
+                        .initial(DigitalState.LOW)
+                        .provider("gpiod-digital-output");
+        return pi4j.create(config);  
+    }
 
-	// Abschnittspunkte berechnen
-	private ArrayList<Pair> getPathPoints(Pair paramCurrentPoint, Pair paramToPoint) {
-		ArrayList<Pair> pathPoints = new ArrayList<>();
-		double lenght = getLenght(paramCurrentPoint, paramToPoint);
-		double path = step;
-		while (path < lenght) {
-			pathPoints.add(calculatePoint(path, paramCurrentPoint, paramToPoint));
-			path += step;
-		}
-		pathPoints.add(paramToPoint);
-		return pathPoints;
+    public double[] getPlotterSide() {
+        return plotterSide;
+    }
 
-	}
+    public Pair getNullPoint() {
+        return new Pair(minX, minY);
+    }
 
-	// Koordinaten f�r Abschnittspunkt bestimmen
-	private Pair calculatePoint(double path, Pair paramCurrentPoint, Pair paramToPoint) {
-		double C = getLenght(paramCurrentPoint, paramToPoint);
-		if (C == 0) {
-			return paramCurrentPoint;
-		}
-		double y = (paramToPoint.getY() - paramCurrentPoint.getY()) * path / C;
-		double x = (paramToPoint.getX() - paramCurrentPoint.getX()) * path / C;
+    private boolean isReady() {
+        return !simulation && gpio;
+    }
 
-		Pair newPoint = new Pair(paramCurrentPoint.getX() + x, paramCurrentPoint.getY() + y);
+    public boolean isUsed() {
+        return used;
+    }
 
-		return newPoint;
-	}
+    public Pair getStartPoint() {
+        return startPoint;
+    }
 
-	public void addDriverMoveObserverIf(DriverMoveObserverIf driverMoveObserverIf) {
-		observerList.add(driverMoveObserverIf);
-	}
-
-	public void setPause(boolean pause) {
-		this.pause = pause;
-	}
-
-	public void stop() {
-		stop = true;
-	}
-
-	public void setSimulation(boolean paramSimulation) {
-		simulation = paramSimulation;
-	}
-
-	public void loadProperty() {
-		String configFile = SettingsManager.getCurrent().getValue(de.revout.pi.vplotter.saves.SettingsManager.KEY.CONFIG);
-		if(configFile==null) {
-			configFile= "conf/default.plotterconf";
-		}
-		File file = new File(configFile);
-		if(file.exists()) {
-			VPlotterPropertiesManager.getCurrent().load(file);	
-		}
-		
-		paperHeight = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.PAPERHEIGHT));
-		paperWidth = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.PAPERWIDTH));
-		minX = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.MINX));
-		minY = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.MINY));
-		plotterSide[0] = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.PLOTTERWIDTH));
-		plotterSide[1] = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.PLOTTERHEIGHT));
-		maxX = minX + plotterSide[0];
-		maxY = minY + plotterSide[1];
-		lengthBetween = Integer.parseInt(VPlotterPropertiesManager.getCurrent().getValue(KEY.SPACEBETWEEN));
-		step = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.SECTORLENGTH));
-		drawPause = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.DRAWPAUSE));
-		stepsPerMM = Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPSPERMM));
-		startPoint = new Pair(Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STARTPOINTX)), Double.parseDouble(VPlotterPropertiesManager.getCurrent().getValue(KEY.STARTPOINTY)));
-		stepPauseDraw = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPPAUSEDRAW));
-		stepPauseSlack = Long.parseLong(VPlotterPropertiesManager.getCurrent().getValue(KEY.STEPPAUSESLACK));
-		currentPoint = new Pair(startPoint.getX(), startPoint.getY());
-		motorLinks = new Pair(0, 0);
-		motorRechts = new Pair(lengthBetween, 0);
-		x = (paperWidth-plotterSide[0])/2;
-		y = (paperHeight-plotterSide[1])/2;
-	}
-
-
-	public double[] getPlotterSide() {
-		return plotterSide;
-	}
-
-	public Pair getNullPoint() {
-		return new Pair(minX, minY);
-	}
-	
-	private boolean isReady() {
-		return !simulation && gpio;
-	}
-
-	public boolean isUsed() {
-		return used;
-	}
-
-	public Pair getStartPoint() {
-		return startPoint;
-	}
-	
-	private void pause(long paramMicros) {
-		long toTime = System.nanoTime()+paramMicros*1000;
-		while(toTime>System.nanoTime());
-	}
-
+    /**
+     * Wartet für die gegebene Zeit (in Mikrosekunden).
+     */
+    private void pause(long micros) {
+        long targetTime = System.nanoTime() + micros * 1000;
+        while (System.nanoTime() < targetTime);
+    }
 }

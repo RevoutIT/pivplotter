@@ -2,49 +2,53 @@ package de.revout.pi.vplotter.view;
 
 import java.awt.Graphics;
 import java.awt.Image;
-
 import javax.swing.JPanel;
-
 import de.revout.pi.vplotter.model.Model;
 
 public class PlotterView extends JPanel {
-	/**
-	 * 
-	 */
-	private static final long serialVersionUID = 1L;
 
-	public PlotterView() {
-		super();
-		setBackground(MainView.COLOR3);
-	}
+    private static final long serialVersionUID = 1L;
 
-	@Override
-	protected void paintComponent(Graphics g) {
-		super.paintComponent(g);
-	
-		Image image = Model.getCurrent().getSvgImage();
-		if (image != null) {
-			
-			double imageProp = (double)image.getWidth(null)/(double)image.getHeight(null);
-			
-			int newHeight = (int) (((double)getWidth())/imageProp);
-			double scall = 1;
-			if(getHeight()<newHeight) {
-				scall = (double)newHeight/(double)getHeight();
-				int xDiff = (getWidth()-(int)(getWidth()/scall))/2;
-				g.drawImage(image, xDiff, 0 , (int)(getWidth()/scall)+xDiff, (int)(((double)getWidth()/imageProp)/scall) ,0,0,image.getWidth(null),image.getHeight(null),null );
-			}else {
-			
-			if(imageProp>=1) {
-				int yDiff = (getHeight()-(int)((double)getWidth()/imageProp))/2;
-				g.drawImage(image, 0, yDiff , getWidth(), (int)((double)getWidth()/imageProp)+yDiff ,0,0,image.getWidth(null),image.getHeight(null),null );
-			}else {
-				int xDiff = (getWidth()-(int)((double)getHeight()*imageProp))/2;
-				g.drawImage(image, xDiff,0, (int)((double)getHeight()*imageProp)+xDiff, getHeight() ,0,0,image.getWidth(null),image.getHeight(null),null );
-			}
-			}
-		
-		}	
-	}
+    public PlotterView() {
+        super();
+        setBackground(MainView.COLOR3);
+    }
 
+    @Override
+    protected void paintComponent(Graphics g) {
+        super.paintComponent(g);
+        
+        Image svgImage = Model.getCurrent().getSvgImage();
+        if (svgImage == null) {
+            return;
+        }
+        
+        // Abmessungen des Panels und des Bildes abrufen
+        int panelWidth = getWidth();
+        int panelHeight = getHeight();
+        int imageWidth = svgImage.getWidth(null);
+        int imageHeight = svgImage.getHeight(null);
+        
+        // Errechne das Seitenverhältnis des Bildes
+        double imageAspect = (double) imageWidth / imageHeight;
+        
+        // Bestimme die Zielabmessungen, sodass das Bild vollständig in das Panel passt
+        int drawWidth, drawHeight;
+        if ((double)panelWidth / panelHeight > imageAspect) {
+            // Höhe ist das begrenzende Element
+            drawHeight = panelHeight;
+            drawWidth = (int) (panelHeight * imageAspect);
+        } else {
+            // Breite ist das begrenzende Element
+            drawWidth = panelWidth;
+            drawHeight = (int) (panelWidth / imageAspect);
+        }
+        
+        // Berechne den Offset zur Zentrierung des Bildes im Panel
+        int xOffset = (panelWidth - drawWidth) / 2;
+        int yOffset = (panelHeight - drawHeight) / 2;
+        
+        // Zeichne das Bild skaliert und zentriert
+        g.drawImage(svgImage, xOffset, yOffset, drawWidth, drawHeight, this);
+    }
 }

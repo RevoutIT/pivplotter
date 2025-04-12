@@ -7,108 +7,98 @@ import java.awt.Insets;
 import java.awt.LayoutManager;
 
 class StackLayout implements LayoutManager {
-    /**
-     * Default size when no components are contained
-     */
-    private static Dimension emptySize = null;
-    /**
-     * Holds currently visible component or null if no comp is visible
-     */
-    private Component visibleComp = null;
+
+    /** Standardgröße für einen leeren Container */
+    private static final Dimension EMPTY_SIZE = new Dimension(100, 100);
+    
+    /** Aktuell sichtbare Komponente oder null, wenn keine Komponente sichtbar ist */
+    private Component visibleComponent = null;
 
     /**
-     * Set the currently displayed component.  If passed null for the component,
-     * all contained components will be made invisible (sliding windows do this)
+     * Zeigt die übergebene Komponente im Container an.
+     * Ist der Parameter null, so werden alle enthaltenen Komponenten versteckt.
+     *
+     * @param comp   die anzuzeigende Komponente
+     * @param parent der übergeordnete Container
      */
-    public void showComponent(Component c, Container parent) {
-        if (visibleComp != c) {
-            if (!parent.isAncestorOf(c) && c != null) {
-                parent.add(c);
+    public void showComponent(Component comp, Container parent) {
+        if (visibleComponent != comp) {
+            if (comp != null && !parent.isAncestorOf(comp)) {
+                parent.add(comp);
             }
             synchronized (parent.getTreeLock()) {
-                if (visibleComp != null) {
-                    visibleComp.setVisible(false);
+                if (visibleComponent != null) {
+                    visibleComponent.setVisible(false);
                 }
-                visibleComp = c;
-                if (c != null) {
-                    visibleComp.setVisible(true);
+                visibleComponent = comp;
+                if (comp != null) {
+                    comp.setVisible(true);
                 }
-                // trigger re-layout
-                parent.validate(); //XXX revalidate should work!
+                // Aktualisiert das Layout des Containers
+                parent.validate(); // Alternativ: parent.revalidate();
             }
         }
     }
-    
-    /** Allows support for content policies */
-    public Component getVisibleComponent() {
-        return visibleComp;
-    }
 
     /**
-     * ********** Implementation of LayoutManager interface *********
+     * Liefert die aktuell sichtbare Komponente.
+     *
+     * @return die sichtbare Komponente oder null
      */
+    public Component getVisibleComponent() {
+        return visibleComponent;
+    }
 
+    @Override
     public void addLayoutComponent(String name, Component comp) {
         synchronized (comp.getTreeLock()) {
             comp.setVisible(false);
-            // keep consistency if showComponent was already called on this
-            // component before
-            if (comp == visibleComp) {
-                visibleComp = null;
+            // Wenn diese Komponente bereits als sichtbar markiert war, aufheben
+            if (comp == visibleComponent) {
+                visibleComponent = null;
             }
         }
     }
-    
-    
+
+    @Override
     public void removeLayoutComponent(Component comp) {
         synchronized (comp.getTreeLock()) {
-            if (comp == visibleComp) {
-                visibleComp = null;
+            if (comp == visibleComponent) {
+                visibleComponent = null;
             }
-            // kick out removed component as visible, so that others
-            // don't have problems with hidden components
+            // Entfernte Komponente wird wieder sichtbar geschaltet,
+            // um Problemen mit versteckten Komponenten vorzubeugen.
             comp.setVisible(true);
         }
     }
 
+    @Override
     public void layoutContainer(Container parent) {
-        if (visibleComp != null) {
+        if (visibleComponent != null) {
             synchronized (parent.getTreeLock()) {
                 Insets insets = parent.getInsets();
-                visibleComp.setBounds(insets.left, insets.top, parent.getWidth()
-                   - (insets.left + insets.right), parent.getHeight()
-                   - (insets.top + insets.bottom));
+                int width = parent.getWidth() - insets.left - insets.right;
+                int height = parent.getHeight() - insets.top - insets.bottom;
+                visibleComponent.setBounds(insets.left, insets.top, width, height);
             }
         }
     }
 
+    @Override
     public Dimension minimumLayoutSize(Container parent) {
-        return visibleComp == null ?
-                getEmptySize() : preferredLayoutSize(parent);
+        return (visibleComponent == null) ? EMPTY_SIZE : preferredLayoutSize(parent);
     }
 
+    @Override
     public Dimension preferredLayoutSize(Container parent) {
-        Dimension d = parent.getSize();
-        if (visibleComp != null) {
-            Dimension d1 = visibleComp.getPreferredSize();
-            d.width = Math.max(d.width, d1.width);
-            d.height = Math.max(d.height, d1.height);
-        } else {
-            if (d.width == 0) {
-                return getEmptySize();
-            }
+        Dimension currentSize = parent.getSize();
+        if (visibleComponent != null) {
+            Dimension compPrefSize = visibleComponent.getPreferredSize();
+            currentSize.width = Math.max(currentSize.width, compPrefSize.width);
+            currentSize.height = Math.max(currentSize.height, compPrefSize.height);
+        } else if (currentSize.width == 0 || currentSize.height == 0) {
+            return EMPTY_SIZE;
         }
-        return d;
+        return currentSize;
     }
-
-    /**
-     * Specifies default size of empty container
-     */
-    private static Dimension getEmptySize() {
-        if (emptySize == null) {
-            emptySize = new Dimension(100, 100);
-        }
-        return emptySize;
-    }
-
 }

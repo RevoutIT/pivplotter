@@ -4,8 +4,6 @@ import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Desktop;
 import java.awt.Graphics;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
@@ -23,7 +21,6 @@ import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 import javax.swing.filechooser.FileFilter;
 import javax.swing.filechooser.FileSystemView;
@@ -36,505 +33,427 @@ import de.revout.pi.vplotter.saves.SettingsManager;
 import de.revout.pi.vplotter.saves.VPlotterPropertiesManager;
 import de.revout.pi.vplotter.version.Version;
 
-
 public class MainView extends JFrame {
 
-	private MainView mainView = this;
-	private final String PROPERTYSUFFIX = ".plotterconf"; //$NON-NLS-1$
-	public final static Color COLOR1 = new Color(162, 182, 210);
-	public final static Color COLOR2 = new Color(137, 164, 201);
-	public final static Color COLOR3 = new Color(171,198,222);
-	private StackLayout stackLayout;
-	private JPanel page0;
-	private JPanel page1;
-	private JPanel page2;
-	private JPanel page3;
-	private JMenuItem loadFile;
-	private JMenuItem newProcess;
-	private JMenuItem goToStart;
-	private JMenu plotter;
-	private JMenu config;
-	private JMenu recentFiles;
-	private JMenu file;
-	private List<String> lastFiles;
-	
-	/**
-	 * 
-	 */
-	private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
+    private static final String PROPERTY_SUFFIX = ".plotterconf";
 
-	public MainView() {
-		
-		init();
-		addWindowListener(new WindowAdapter() {
-			public void windowClosing(WindowEvent e) {
-				Driver.getCurrent().gpioStop();
-			}
-		});
-	}
+    public static final Color COLOR1 = new Color(162, 182, 210);
+    public static final Color COLOR2 = new Color(137, 164, 201);
+    public static final Color COLOR3 = new Color(171, 198, 222);
 
+    private StackLayout stackLayout;
+    private JPanel homePage;
+    private JPanel filterPanel;
+    private JPanel previewPanel;
+    private JPanel liveViewPanel;
+    private JMenuItem loadFileItem;
+    private JMenuItem newProcessItem;
+    private JMenuItem goToStartItem;
+    private JMenu plotterMenu;
+    private JMenu configMenu;
+    private JMenu recentFilesMenu;
+    private JMenu fileMenu;
+    private List<String> lastFiles;
 
+    public MainView() {
+        init();
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                Driver.getCurrent().gpioStop();
+            }
+        });
+    }
 
-	private void init() {
-		lastFiles = new ArrayList<>();
-		Driver.getCurrent().loadProperty();
-		setTitle(Version.number+" "+ Dictionary.getCurrent().getString("MainView.TITLE") + SettingsManager.getCurrent().getValue( SettingsManager.KEY.CONFIG)); //$NON-NLS-1$
-		setDefaultCloseOperation(DISPOSE_ON_CLOSE);
-		setExtendedState(JFrame.MAXIMIZED_BOTH);
-		createMenu();
-		stackLayout = new StackLayout();
-		setLayout(stackLayout);
-		createPages();
-		setVisible(true);
-	}
-	
-	private void createPages() {
+    private void init() {
+        lastFiles = new ArrayList<>();
+        Driver.getCurrent().loadProperty();
+        setTitle(Version.number + " " + Dictionary.getCurrent().getString("MainView.TITLE") 
+                + SettingsManager.getCurrent().getValue(SettingsManager.KEY.CONFIG));
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        setExtendedState(JFrame.MAXIMIZED_BOTH);
+        createMenu();
+        stackLayout = new StackLayout();
+        setLayout(stackLayout);
+        createPages();
+        setVisible(true);
+    }
 
-		//Lehrseite
-		page0 = new HomePage();
-		page0.setBackground(new Color(162,182,210));
-		
-		//Filter wählen
-		page1 = new FilterPanel(this);
-		page1.setBackground(new Color(162,182,210));
-		
-		//Vorschau
-		page2 = new PlotterPreview(this);
-		page2.setBackground(new Color(162,182,210));
-		
-		//Live View
-		page3 = new LiveView(this);
-		page3.setBackground(new Color(162,182,210));
-		
-		
-		stackLayout.addLayoutComponent("0", page1);
-		stackLayout.addLayoutComponent("1", page1);
+    private void createPages() {
+        // Home page
+        homePage = new HomePage();
+        homePage.setBackground(COLOR1);
 
-		changePage(page0);
-	}
+        // Filter panel
+        filterPanel = new FilterPanel(this);
+        filterPanel.setBackground(COLOR1);
 
-	public void newProcess() {
-		Model.getCurrent().newProcess();
-		createPages();
-		validate();
-		repaint();
-	}
+        // Preview panel
+        previewPanel = new PlotterPreview(this);
+        previewPanel.setBackground(COLOR1);
 
-	public void changePage(JPanel paramPage) {
-		stackLayout.showComponent(paramPage, this);
-		if (Driver.getCurrent().isUsed()) {
-			goToStart.setEnabled(true);
-		}
-		recentFiles.setEnabled(true);
-		loadFile.setEnabled(true);
-		newProcess.setEnabled(true);
-		config.setEnabled(true);
-		plotter.setEnabled(true);
-		
-		if (paramPage==page0) {
-			newProcess.setEnabled(false);
-		}else {
-			if (paramPage==page1) {
-				if (Model.getCurrent().getImage()==null) {
-					if (Model.getCurrent().getSvgImage()!=null) {
-						changePage(page2);
-					}else {
-						changePage(page0);
-					}
-				}
-			}
-			recentFiles.setEnabled(false);
-			loadFile.setEnabled(false);
-			if (paramPage==page2) {
-				plotter.setEnabled(false);
-			}
-			if (paramPage==page3) {
-				config.setEnabled(false);
-				plotter.setEnabled(false);
-			}
-		}
-		
-	}
-	
-	private void createMenu() {
-		JMenuBar bar = new JMenuBar();
-		
-		file = new JMenu(Dictionary.getCurrent().getString("MainView.FILE")); //$NON-NLS-1$
-		file.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.File").charAt(0)); //$NON-NLS-1$
-		bar.add(file);
-		
-		config = new JMenu(Dictionary.getCurrent().getString("MainView.CONFIG")); //$NON-NLS-1$
-		config.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Config").charAt(0)); //$NON-NLS-1$
-		bar.add(config);
-		
-		plotter = new JMenu(Dictionary.getCurrent().getString("MainView.PLOTTER")); //$NON-NLS-1$
-		plotter.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Plotter").charAt(0)); //$NON-NLS-1$
-		bar.add(plotter);
+        // Live view panel
+        liveViewPanel = new LiveView(this);
+        liveViewPanel.setBackground(COLOR1);
 
-		// Mainview neu malen, wenn Menü ausgewählt wurde
-		file.addChangeListener(new ChangeListener() {
-			@Override
-			public void stateChanged(ChangeEvent e) {
-				mainView.repaint();				
-			}
-		});
-		config.addChangeListener(new ChangeListener() {
-			@Override
-			public void stateChanged(ChangeEvent e) {
-				mainView.repaint();
-			}
-		});
-		plotter.addChangeListener(new ChangeListener() {
-			@Override
-			public void stateChanged(ChangeEvent e) {
-				mainView.repaint();
-			}
-		});
-		//PageLocation
-		JMenuItem pageLocation = new JMenuItem(Dictionary.getCurrent().getString("MainView.ShowPage")); //$NON-NLS-1$
-		pageLocation.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				Driver.getCurrent().showPageLocation();
-				goToStart.setEnabled(true);
-			}
-		});
-		plotter.add(pageLocation);
-		
-		
-		// Test
-		JMenuItem test = new JMenuItem(Dictionary.getCurrent().getString("MainView.TEST")); //$NON-NLS-1$
-		test.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Test").charAt(0)); //$NON-NLS-1$
-		test.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				Driver.getCurrent().test();
-				goToStart.setEnabled(true);
-			}
-		});
-		plotter.add(test);
+        // Register pages im StackLayout mit eindeutigen Keys
+        stackLayout.addLayoutComponent("home", homePage);
+        stackLayout.addLayoutComponent("filter", filterPanel);
+        stackLayout.addLayoutComponent("preview", previewPanel);
+        stackLayout.addLayoutComponent("live", liveViewPanel);
 
-		// Motoren off
-		JMenuItem motorsOff = new JMenuItem(Dictionary.getCurrent().getString("MainView.OFF")); //$NON-NLS-1$
-		motorsOff.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.MotorsOff").charAt(0)); //$NON-NLS-1$
-		motorsOff.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				Driver.getCurrent().motorsOff();
-			}
-		});
-		plotter.add(motorsOff);
+        // Zeige zunÃ¤chst die Home-Page
+        changePage(homePage);
+    }
 
-		// Motoren on
-		JMenuItem motorsOn = new JMenuItem(Dictionary.getCurrent().getString("MainView.ON")); //$NON-NLS-1$
-		motorsOn.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.MotorsOn").charAt(0)); //$NON-NLS-1$
-		motorsOn.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				Driver.getCurrent().motorsOn();
-			}
-		});
-		plotter.add(motorsOn);
-		
-		//GoToStart
-		goToStart = new JMenuItem(Dictionary.getCurrent().getString("MainView.GoToStart")); //$NON-NLS-1$
-		goToStart.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				Driver.getCurrent().goTo(Driver.getCurrent().getStartPoint());
-			}
-		});
-		plotter.add(goToStart);
-		goToStart.setEnabled(false);
-				
-		
-		// New
-		newProcess = new JMenuItem(Dictionary.getCurrent().getString("MainView.New")); //$NON-NLS-1$
-		newProcess.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				newProcess();
-			}
-		});
-		file.add(newProcess);
+    public void newProcess() {
+        Model.getCurrent().newProcess();
+        createPages();
+        validate();
+        repaint();
+    }
 
-		// Load File Menü
-		loadFile = new JMenuItem(Dictionary.getCurrent().getString("MainView.LoadFile")); //$NON-NLS-1$
-		loadFile.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.LoadFile").charAt(0)); //$NON-NLS-1$
-		loadFile.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				loadFile();
-			}
-		});
-		file.add(loadFile);
+    public void changePage(JPanel page) {
+        stackLayout.showComponent(page, this);
+        boolean used = Driver.getCurrent().isUsed();
+        goToStartItem.setEnabled(used);
+        recentFilesMenu.setEnabled(true);
+        loadFileItem.setEnabled(true);
+        newProcessItem.setEnabled(true);
+        configMenu.setEnabled(true);
+        plotterMenu.setEnabled(true);
 
-		// Recent Used Files Menü
-		recentFiles = new JMenu(Dictionary.getCurrent().getString("MainView.RecentUsed")); //$NON-NLS-1$
-		recentFiles.setMnemonic(Dictionary.getCurrent().getString("MainView.MnemonicRecentUsed").charAt(0)); //$NON-NLS-1$
-		recentFiles.addChangeListener(new ChangeListener() {
-			@Override
-			public void stateChanged(ChangeEvent e) {
-				mainView.repaint();
-			}
-		});
-		file.add(recentFiles);
+        if (page == homePage) {
+            newProcessItem.setEnabled(false);
+        } else {
+            if (page == filterPanel) {
+                if (Model.getCurrent().getImage() == null) {
+                    if (Model.getCurrent().getSvgImage() != null) {
+                        changePage(previewPanel);
+                    } else {
+                        changePage(homePage);
+                    }
+                }
+            }
+            recentFilesMenu.setEnabled(false);
+            loadFileItem.setEnabled(false);
+            if (page == previewPanel) {
+                plotterMenu.setEnabled(false);
+            }
+            if (page == liveViewPanel) {
+                configMenu.setEnabled(false);
+                plotterMenu.setEnabled(false);
+            }
+        }
+    }
 
-		loadRecent();
-		
-		// Exit Menü
-		JMenuItem exit = new JMenuItem(Dictionary.getCurrent().getString("MainView.EXIT")); //$NON-NLS-1$
-		exit.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Exit").charAt(0)); //$NON-NLS-1$
-		exit.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				System.exit(0);
-			}
-		});
-		file.add(exit);
+    private void createMenu() {
+        JMenuBar bar = new JMenuBar();
 
-		// LoadConfig Menü
-		JMenuItem loadConfig = new JMenuItem(Dictionary.getCurrent().getString("MainView.LOAD")); //$NON-NLS-1$
-		loadConfig.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.LoadConfig").charAt(0)); //$NON-NLS-1$
-		loadConfig.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				JFileChooser c = new JFileChooser();
-				c.setFileFilter(new FileFilter() {
-					@Override
-					public String getDescription() {
-						return "*" + PROPERTYSUFFIX; //$NON-NLS-1$
-					}
-					@Override
-					public boolean accept(File f) {
-						return f.getName().endsWith(PROPERTYSUFFIX) || f.isDirectory();
-					}
-				});
-				c.setCurrentDirectory(new File("./conf/")); //$NON-NLS-1$
-				c.showOpenDialog(mainView);
-				File file = c.getSelectedFile();
-				if (file != null) {
-					VPlotterPropertiesManager.getCurrent().load(file);
-					mainView.setTitle(Dictionary.getCurrent().getString("MainView.TITLE") //$NON-NLS-1$
-							+ SettingsManager.getCurrent().getValue( SettingsManager.KEY.CONFIG));
-				}
-			}
-		});
-		config.add(loadConfig);
+        fileMenu = new JMenu(Dictionary.getCurrent().getString("MainView.FILE"));
+        fileMenu.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.File").charAt(0));
+        bar.add(fileMenu);
 
-		// NewConfig Menü
-		JMenuItem newConfig = new JMenuItem(Dictionary.getCurrent().getString("MainView.NEW")); //$NON-NLS-1$
-		newConfig.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.NewConfig").charAt(0)); //$NON-NLS-1$
-		newConfig.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				JFileChooser c = new JFileChooser();
-				c.setFileFilter(new FileFilter() {
-					@Override
-					public String getDescription() {
-						return "*" + PROPERTYSUFFIX; //$NON-NLS-1$
-					}
+        configMenu = new JMenu(Dictionary.getCurrent().getString("MainView.CONFIG"));
+        configMenu.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Config").charAt(0));
+        bar.add(configMenu);
 
-					@Override
-					public boolean accept(File f) {
-						return f.getName().endsWith(PROPERTYSUFFIX) || f.isDirectory();
-					}
-				});
-				c.setCurrentDirectory(new File("./conf/")); //$NON-NLS-1$
-				c.showSaveDialog(mainView);
-				File file = c.getSelectedFile();
-				if (file != null) {
-					if (!file.getName().endsWith(PROPERTYSUFFIX)) {
-						file = new File(file.getAbsolutePath() + PROPERTYSUFFIX);
-					}
-					VPlotterPropertiesManager.getCurrent().newConfig(file);
-				}
-			}
-		});
-		config.add(newConfig);
+        plotterMenu = new JMenu(Dictionary.getCurrent().getString("MainView.PLOTTER"));
+        plotterMenu.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Plotter").charAt(0));
+        bar.add(plotterMenu);
 
-		// EditConfig Menü
-		JMenuItem editConfig = new JMenuItem(Dictionary.getCurrent().getString("MainView.EDIT")); //$NON-NLS-1$
-		editConfig.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.EditConfig").charAt(0)); //$NON-NLS-1$
-		editConfig.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				JFileChooser c = new JFileChooser();
-				c.setFileFilter(new FileFilter() {
-					@Override
-					public String getDescription() {
-						return "*" + PROPERTYSUFFIX; //$NON-NLS-1$
-					}
+        // Einfacher Repaint-Listener fÃ¼r alle MenÃ¼s
+        ChangeListener repaintListener = e -> repaint();
+        fileMenu.addChangeListener(repaintListener);
+        configMenu.addChangeListener(repaintListener);
+        plotterMenu.addChangeListener(repaintListener);
 
-					@Override
-					public boolean accept(File f) {
-						return f.getName().endsWith(PROPERTYSUFFIX) || f.isDirectory();
-					}
-				});
-				c.setCurrentDirectory(new File("./conf/")); //$NON-NLS-1$
-				c.showOpenDialog(mainView);
-				File file = c.getSelectedFile();
-				if (file != null) {
-					try {
-						Desktop.getDesktop().open(file);
-					} catch (IOException e1) {
-						e1.printStackTrace();
-						try {
-							Runtime.getRuntime().exec("notepad.exe " + file); //$NON-NLS-1$
-						} catch (IOException e2) {
-							JOptionPane.showConfirmDialog(mainView, e2.getMessage(),
-									Dictionary.getCurrent().getString("LoadingPanel.Error"), JOptionPane.CLOSED_OPTION, //$NON-NLS-1$
-									JOptionPane.ERROR_MESSAGE);
-							e2.printStackTrace();
-						}
-					}
-				}
-			}
-		});
-		config.add(editConfig);
+        // Plotter-MenÃ¼eintrÃ¤ge
+        JMenuItem pageLocation = new JMenuItem(Dictionary.getCurrent().getString("MainView.ShowPage"));
+        pageLocation.addActionListener(e -> {
+            Driver.getCurrent().showPageLocation();
+            goToStartItem.setEnabled(true);
+        });
+        plotterMenu.add(pageLocation);
 
-		setJMenuBar(bar);
-	}
-	
-	private void loadFile() {
-		String oldFile = SettingsManager.getCurrent().getValue( SettingsManager.KEY.FILEPATH);
-		String filename = getFilePath();
-		if(filename==null) {
-			return;
-		}
-		
-		if(!filename.equals(oldFile)) {
-			if(!lastFiles.contains(filename)) {
-				lastFiles.add(filename);
-				saveLastOpenFiles();
-			}
-			Model.getCurrent().setSameFile(false);
-		}
-		setImage(filename);
-	}
-	
+        JMenuItem testItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.TEST"));
+        testItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Test").charAt(0));
+        testItem.addActionListener(e -> {
+            Driver.getCurrent().test();
+            goToStartItem.setEnabled(true);
+        });
+        plotterMenu.add(testItem);
 
-	private String getFilePath() {
-		JFileChooser jfc = new JFileChooser(FileSystemView.getFileSystemView().getHomeDirectory());
-		
-		if (SettingsManager.getCurrent().getValue( SettingsManager.KEY.FILEPATH)!=null) {
-			jfc.setCurrentDirectory(new File(SettingsManager.getCurrent().getValue( SettingsManager.KEY.FILEPATH)));
-		}
+        JMenuItem motorsOffItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.OFF"));
+        motorsOffItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.MotorsOff").charAt(0));
+        motorsOffItem.addActionListener(e -> Driver.getCurrent().motorsOff());
+        plotterMenu.add(motorsOffItem);
 
-		jfc.setFileFilter(new FileFilter() {
-			@Override
-			public String getDescription() {
-				return Dictionary.getCurrent().getString("LoadingPanel.ChoosePicture"); //$NON-NLS-1$
-			}
+        JMenuItem motorsOnItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.ON"));
+        motorsOnItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.MotorsOn").charAt(0));
+        motorsOnItem.addActionListener(e -> Driver.getCurrent().motorsOn());
+        plotterMenu.add(motorsOnItem);
 
-			@Override
-			public boolean accept(File f) {
-				return f.isDirectory() || f.getName().toLowerCase().endsWith(".png") || f.getName().toLowerCase().endsWith(".gif") || f.getName().toLowerCase().endsWith(".jpg")|| f.getName().toLowerCase().endsWith(".jpeg") || f.getName().toLowerCase().endsWith(".bmp") || f.getName().toLowerCase().endsWith(".svg"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-			}
-		});
-		int returnValue = jfc.showOpenDialog(mainView);
+        JMenuItem penAwayItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.PanAway"));
+        penAwayItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.PanAway").charAt(0));
+        penAwayItem.addActionListener(e -> Driver.getCurrent().penAway());
+        plotterMenu.add(penAwayItem);
 
-		if (returnValue == JFileChooser.APPROVE_OPTION) {
-			File selectedFile = jfc.getSelectedFile();
-			try {
-				SettingsManager.getCurrent().setValue( SettingsManager.KEY.FILEPATH, selectedFile.getPath());
-			} catch (IOException e) {
-				// TODO Meldung
-				e.printStackTrace();
-			}
-			return selectedFile.getAbsolutePath();
-		}
-		return null;
-	}
-	
-	private void saveLastOpenFiles() {
-		try {
-			while(lastFiles.size()>5) {
-				lastFiles.remove(0);
-			}
-			SettingsManager.getCurrent().setValue( SettingsManager.KEY.LAST_USED, String.join(";", lastFiles));
-			SettingsManager.getCurrent().save();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
-	
-	private void setImage(String filename) {
-		if(filename.endsWith(".svg")) {
-			mainView.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-			if(Model.getCurrent().generateDataFromSVG(filename)) {
-				previewImage();
-				changePage(page2);
-			}
-			mainView.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-			return;
-		}else {
-			try {
-				BufferedImage img = ImageIO.read(new File(filename));
-				Model.getCurrent().setImage(img);
-				Model.getCurrent().setOriginalImage(img);
-				changePage(page1);
-			} catch (IOException e) {
-				// TODO Meldung
-				e.printStackTrace();
-			}
-		}
-		
-	}
-	
-	private void loadRecent() {
-		recentFiles.removeAll();
-		lastFiles.clear();
-		if(SettingsManager.getCurrent().getValue( SettingsManager.KEY.LAST_USED)!=null){
-			lastFiles.addAll(Arrays.asList(SettingsManager.getCurrent().getValue( SettingsManager.KEY.LAST_USED).split(";")));
-		}
-		
-		for(String file:lastFiles) {
-			JMenuItem filerItem = new JMenuItem(file);
-			filerItem.addActionListener(new ActionListener() {
-				@Override
-				public void actionPerformed(ActionEvent e) {
-					setImage(file);
-				}
-			});
-			recentFiles.add(filerItem);
-		}
-	}
+        JMenuItem penDrawItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.PanDraw"));
+        penDrawItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.PanDraw").charAt(0));
+        penDrawItem.addActionListener(e -> Driver.getCurrent().penDraw());
+        plotterMenu.add(penDrawItem);
 
-	public JPanel getPage0() {
-		return page0;
-	}
+        
+        goToStartItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.GoToStart"));
+        goToStartItem.addActionListener(e -> Driver.getCurrent().goTo(Driver.getCurrent().getStartPoint()));
+        plotterMenu.add(goToStartItem);
+        goToStartItem.setEnabled(false);
 
-	public JPanel getPage1() {
-		return page1;
-	}
+        // File-MenÃ¼eintrÃ¤ge
+        newProcessItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.New"));
+        newProcessItem.addActionListener(e -> newProcess());
+        fileMenu.add(newProcessItem);
 
-	public JPanel getPage2() {
-		return page2;
-	}
+        loadFileItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.LoadFile"));
+        loadFileItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.LoadFile").charAt(0));
+        loadFileItem.addActionListener(e -> loadFile());
+        fileMenu.add(loadFileItem);
 
-	public JPanel getPage3() {
-		return page3;
-	}
+        recentFilesMenu = new JMenu(Dictionary.getCurrent().getString("MainView.RecentUsed"));
+        recentFilesMenu.setMnemonic(Dictionary.getCurrent().getString("MainView.MnemonicRecentUsed").charAt(0));
+        recentFilesMenu.addChangeListener(repaintListener);
+        fileMenu.add(recentFilesMenu);
 
-	public JMenu getPlotter() {
-		return plotter;
-	}
-	
-	public void previewImage() {
-		Graphics g = Model.getCurrent().getSvgImage().getGraphics();
-		int lastX = 0;
-		int lastY = 0;
-		g.setColor(Color.WHITE);
-		g.fillRect(0, 0, Model.getCurrent().getSvgImage().getWidth()-1,Model.getCurrent().getSvgImage().getHeight()-1);
-		g.setColor(Color.BLACK);
-		Model.getCurrent().setSectionList(Model.getCurrent().createSectionList());
-		if (!Model.getCurrent().getSectionList().isEmpty()) {
-			for (Section sec : Model.getCurrent().getSectionList()) {
-				lastX = (int) sec.getX();
-				lastY = (int) sec.getY();
-				if (!sec.getLineData().isEmpty()) {
-					double[] v = Arrays.asList(sec.getLineData().split(" ")).stream().mapToDouble(Double::parseDouble).toArray(); //$NON-NLS-1$
-					for (int i = 0; i < v.length; i = i + 2) {
-						int x = (int) v[i];
-						int y = (int) v[i + 1];
-						g.drawLine(lastX, lastY, x, y);
-						lastX = x;
-						lastY = y;
-					}
-				}
-			}
-		}
-	}
+        loadRecentFiles();
 
+        JMenuItem exitItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.EXIT"));
+        exitItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Exit").charAt(0));
+        exitItem.addActionListener(e -> System.exit(0));
+        fileMenu.add(exitItem);
+
+        // Config-MenÃ¼eintrÃ¤ge
+        JMenuItem loadConfigItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.LOAD"));
+        loadConfigItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.LoadConfig").charAt(0));
+        loadConfigItem.addActionListener(e -> loadConfig());
+        configMenu.add(loadConfigItem);
+
+        JMenuItem newConfigItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.NEW"));
+        newConfigItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.NewConfig").charAt(0));
+        newConfigItem.addActionListener(e -> newConfig());
+        configMenu.add(newConfigItem);
+
+        JMenuItem editConfigItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.EDIT"));
+        editConfigItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.EditConfig").charAt(0));
+        editConfigItem.addActionListener(e -> editConfig());
+        configMenu.add(editConfigItem);
+
+        setJMenuBar(bar);
+    }
+
+    private FileFilter createConfigFileFilter() {
+        return new FileFilter() {
+            @Override
+            public String getDescription() {
+                return "*" + PROPERTY_SUFFIX;
+            }
+            @Override
+            public boolean accept(File f) {
+                return f.isDirectory() || f.getName().endsWith(PROPERTY_SUFFIX);
+            }
+        };
+    }
+
+    private void loadConfig() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileFilter(createConfigFileFilter());
+        chooser.setCurrentDirectory(new File("./conf/"));
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File file = chooser.getSelectedFile();
+            VPlotterPropertiesManager.getCurrent().load(file);
+            setTitle(Dictionary.getCurrent().getString("MainView.TITLE") 
+                    + SettingsManager.getCurrent().getValue(SettingsManager.KEY.CONFIG));
+        }
+    }
+
+    private void newConfig() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileFilter(createConfigFileFilter());
+        chooser.setCurrentDirectory(new File("./conf/"));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File file = chooser.getSelectedFile();
+            if (!file.getName().endsWith(PROPERTY_SUFFIX)) {
+                file = new File(file.getAbsolutePath() + PROPERTY_SUFFIX);
+            }
+            VPlotterPropertiesManager.getCurrent().newConfig(file);
+        }
+    }
+
+    private void editConfig() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileFilter(createConfigFileFilter());
+        chooser.setCurrentDirectory(new File("./conf/"));
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File file = chooser.getSelectedFile();
+            try {
+                Desktop.getDesktop().open(file);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+                try {
+                    Runtime.getRuntime().exec("notepad.exe " + file);
+                } catch (IOException e) {
+                    JOptionPane.showMessageDialog(this, e.getMessage(), 
+                        Dictionary.getCurrent().getString("LoadingPanel.Error"), JOptionPane.ERROR_MESSAGE);
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    private void loadFile() {
+        String oldFile = SettingsManager.getCurrent().getValue(SettingsManager.KEY.FILEPATH);
+        String filename = getFilePath();
+        if (filename == null) {
+            return;
+        }
+        if (!filename.equals(oldFile)) {
+            if (!lastFiles.contains(filename)) {
+                lastFiles.add(filename);
+                saveLastOpenFiles();
+            }
+            Model.getCurrent().setSameFile(false);
+        }
+        setImage(filename);
+    }
+
+    private FileFilter createImageFileFilter() {
+        return new FileFilter() {
+            @Override
+            public String getDescription() {
+                return Dictionary.getCurrent().getString("LoadingPanel.ChoosePicture");
+            }
+            @Override
+            public boolean accept(File f) {
+                String name = f.getName().toLowerCase();
+                return f.isDirectory() || name.endsWith(".png") || name.endsWith(".gif") 
+                    || name.endsWith(".jpg") || name.endsWith(".jpeg") 
+                    || name.endsWith(".bmp") || name.endsWith(".svg");
+            }
+        };
+    }
+
+    private String getFilePath() {
+        JFileChooser chooser = new JFileChooser(FileSystemView.getFileSystemView().getHomeDirectory());
+        String currentPath = SettingsManager.getCurrent().getValue(SettingsManager.KEY.FILEPATH);
+        if (currentPath != null) {
+            chooser.setCurrentDirectory(new File(currentPath));
+        }
+        chooser.setFileFilter(createImageFileFilter());
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = chooser.getSelectedFile();
+            try {
+                SettingsManager.getCurrent().setValue(SettingsManager.KEY.FILEPATH, selectedFile.getPath());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return selectedFile.getAbsolutePath();
+        }
+        return null;
+    }
+
+    private void saveLastOpenFiles() {
+        try {
+            while (lastFiles.size() > 5) {
+                lastFiles.remove(0);
+            }
+            SettingsManager.getCurrent().setValue(SettingsManager.KEY.LAST_USED, String.join(";", lastFiles));
+            SettingsManager.getCurrent().save();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void setImage(String filename) {
+        if (filename.toLowerCase().endsWith(".svg")) {
+            setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+            if (Model.getCurrent().generateDataFromSVG(filename)) {
+                previewImage();
+                changePage(previewPanel);
+            }
+            setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+        } else {
+            try {
+                BufferedImage img = ImageIO.read(new File(filename));
+                Model.getCurrent().setImage(img);
+                Model.getCurrent().setOriginalImage(img);
+                changePage(filterPanel);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void loadRecentFiles() {
+        recentFilesMenu.removeAll();
+        lastFiles.clear();
+        String lastUsed = SettingsManager.getCurrent().getValue(SettingsManager.KEY.LAST_USED);
+        if (lastUsed != null) {
+            lastFiles.addAll(Arrays.asList(lastUsed.split(";")));
+        }
+        for (String file : lastFiles) {
+            JMenuItem item = new JMenuItem(file);
+            item.addActionListener(e -> setImage(file));
+            recentFilesMenu.add(item);
+        }
+    }
+
+    public JPanel getHomePage() {
+        return homePage;
+    }
+
+    public JPanel getFilterPanel() {
+        return filterPanel;
+    }
+
+    public JPanel getPreviewPanel() {
+        return previewPanel;
+    }
+
+    public JPanel getLiveViewPanel() {
+        return liveViewPanel;
+    }
+
+    public JMenu getPlotterMenu() {
+        return plotterMenu;
+    }
+
+    public void previewImage() {
+        BufferedImage svgImage = Model.getCurrent().getSvgImage();
+        if (svgImage == null) return;
+        Graphics g = svgImage.getGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, svgImage.getWidth() - 1, svgImage.getHeight() - 1);
+        g.setColor(Color.BLACK);
+        Model.getCurrent().setSectionList(Model.getCurrent().createSectionList());
+        if (!Model.getCurrent().getSectionList().isEmpty()) {
+            for (Section sec : Model.getCurrent().getSectionList()) {
+                int lastX = (int) sec.getX();
+                int lastY = (int) sec.getY();
+                if (!sec.getLineData().isEmpty()) {
+                    double[] values = Arrays.stream(sec.getLineData().split(" "))
+                                              .mapToDouble(Double::parseDouble)
+                                              .toArray();
+                    for (int i = 0; i < values.length; i += 2) {
+                        int x = (int) values[i];
+                        int y = (int) values[i + 1];
+                        g.drawLine(lastX, lastY, x, y);
+                        lastX = x;
+                        lastY = y;
+                    }
+                }
+            }
+        }
+        g.dispose();
+    }
 }

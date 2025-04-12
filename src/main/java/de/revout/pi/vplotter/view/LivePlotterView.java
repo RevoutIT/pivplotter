@@ -12,83 +12,93 @@ import de.revout.pi.vplotter.main.DriverMoveObserverIf;
 
 public class LivePlotterView extends JPanel implements DriverMoveObserverIf {
 
-	/**
-	 * 
-	 */
-	private static final long serialVersionUID = 1L;
-	private int lastX;
-	private int lastY;
-	private boolean clear;
-	ArrayList<double[]> pairList;
-	private double plotterWidth = 1;
-	private double plotterHeight = 1;
-	int x = 2;
+    private static final long serialVersionUID = 1L;
+    
+    // Offset für den Zeichenbereich (Rand)
+    private final int offset = 2;
+    
+    // Wird beim ersten Empfang von Bewegungsdaten verwendet, um die Liste zu leeren
+    private boolean shouldClear = true;
+    
+    // Liste der zu zeichnenden Punkte. Jedes Element enthält:
+    // [0]: state, [1]: x-Koordinate (bezogen auf den Nullpunkt), [2]: y-Koordinate (bezogen auf den Nullpunkt)
+    private final ArrayList<double[]> pointList = new ArrayList<>();
+    
+    // Abmessungen des Plotters (werden beim ersten Aufruf von currentMove aktualisiert)
+    private double plotterWidth = 1;
+    private double plotterHeight = 1;
 
-	public LivePlotterView() {
-		super();
-		setBackground(MainView.COLOR3);
-		Driver.getCurrent().addDriverMoveObserverIf(this);
-		lastX = 0;
-		lastY = 0;
-		pairList = new ArrayList<>();
-		clear = true;
-	}
+    public LivePlotterView() {
+        super();
+        setBackground(MainView.COLOR3);
+        Driver.getCurrent().addDriverMoveObserverIf(this);
+    }
 
-	@Override
-	public void currentMove(int paramState, Pair paramToPoint, int paramStepCount, int paramActualStep) {
-		if (clear) {
-			synchronized (pairList) {
-				pairList.clear();
-				clear = false;
-				plotterWidth = Driver.getCurrent().getPlotterSide()[0];
-				plotterHeight = Driver.getCurrent().getPlotterSide()[1];
-			}
-		}
-		double[] point = new double[3];
-		point[0] = paramState;
-		point[1] = paramToPoint.getX() - Driver.getCurrent().getNullPoint().getX();
-		point[2] = paramToPoint.getY() - Driver.getCurrent().getNullPoint().getY();
-		pairList.add(point);
-		repaint();
-	}
+    @Override
+    public void currentMove(int state, Pair toPoint, int stepCount, int actualStep) {
+        synchronized (pointList) {
+            if (shouldClear) {
+                pointList.clear();
+                shouldClear = false;
+                double[] plotterSide = Driver.getCurrent().getPlotterSide();
+                plotterWidth = plotterSide[0];
+                plotterHeight = plotterSide[1];
+            }
+            // Korrigiere die Koordinaten anhand des Nullpunkts des Plotters
+            double[] point = new double[3];
+            point[0] = state;
+            point[1] = toPoint.getX() - Driver.getCurrent().getNullPoint().getX();
+            point[2] = toPoint.getY() - Driver.getCurrent().getNullPoint().getY();
+            pointList.add(point);
+        }
+        repaint();
+    }
 
-	@Override
-	protected void paintComponent(Graphics g) {
-		super.paintComponent(g);
+    @Override
+    protected void paintComponent(Graphics g) {
+        super.paintComponent(g);
 
-		synchronized (pairList) {
-			double scaleX = plotterWidth / (g.getClipBounds().getWidth()-7);
-			double scaleY =  plotterHeight / (g.getClipBounds().getHeight()-7);
-			double scale = Math.max(scaleX,scaleY);
-			g.setColor(Color.WHITE);
-			g.fillRect(0, 0, (int)(plotterWidth/scale)+x*2, (int)(plotterHeight/scale)+x*2);
-			g.setColor(Color.BLACK);
+        synchronized (pointList) {
+            int clipWidth = g.getClipBounds().width - 7;
+            int clipHeight = g.getClipBounds().height - 7;
+            double scaleX = plotterWidth / clipWidth;
+            double scaleY = plotterHeight / clipHeight;
+            // Wähle den maximalen Skalierungsfaktor, um das komplette Plotter-Layout abzubilden
+            double scale = Math.max(scaleX, scaleY);
 
-			
-			for (int i = 0; i < pairList.size(); i++) {
-				double[] point = pairList.get(i);
-				if(point!=null) {
-					if (1 == point[0]) {
-						g.drawLine(lastX, lastY, (int) (point[1] / scale)+x, (int) (point[2] / scale)+x);
-					}
-	
-					lastX = (int) (point[1] / scale)+x;
-					lastY = (int) (point[2] / scale)+x;
-				}
-			}
+            int drawWidth = (int) (plotterWidth / scale) + offset * 2;
+            int drawHeight = (int) (plotterHeight / scale) + offset * 2;
+            
+            // Fülle den Hintergrund weiß
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, drawWidth, drawHeight);
+            g.setColor(Color.BLACK);
 
-		}
-	}
+            // Zeichne Linien, die die Punkte verbinden, sofern der state (point[0]) 1 ist.
+            int prevX = -1, prevY = -1;
+            for (double[] point : pointList) {
+                int currentX = (int) (point[1] / scale) + offset;
+                int currentY = (int) (point[2] / scale) + offset;
+                if (point[0] == 1 && prevX != -1 && prevY != -1) {
+                    g.drawLine(prevX, prevY, currentX, currentY);
+                }
+                // Aktualisiere die vorherigen Koordinaten für den nächsten Durchlauf
+                prevX = currentX;
+                prevY = currentY;
+            }
+        }
+    }
 
-	@Override
-	public void finish() {
-		clear = true;
-	}
+    @Override
+    public void finish() {
+        shouldClear = true;
+    }
 
-	@Override
-	public void init() {
-		pairList.clear();
-		repaint();
-	}
-
+    @Override
+    public void init() {
+        synchronized (pointList) {
+            pointList.clear();
+        }
+        repaint();
+    }
 }

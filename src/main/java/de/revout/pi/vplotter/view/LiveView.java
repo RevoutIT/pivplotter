@@ -96,7 +96,7 @@ public class LiveView extends JPanel implements DriverMoveObserverIf{
 			@Override
 			public void actionPerformed(ActionEvent e) {
 				Driver.getCurrent().stop();
-				mainView.changePage(mainView.getPage1());
+				mainView.changePage(mainView.getFilterPanel());
 				stopButton.setEnabled(false);
 				playButton.setEnabled(true);
 				playButton.setText(Dictionary.getCurrent().getString("ControlPanel.BtnPause")); //$NON-NLS-1$

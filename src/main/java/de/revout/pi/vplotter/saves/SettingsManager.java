@@ -1,67 +1,100 @@
 package de.revout.pi.vplotter.saves;
 
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.Properties;
 
 public class SettingsManager {
 
-	private static final String SETTINGS_PROPERTY = "./conf/programm.settings"; //$NON-NLS-1$
-	private static SettingsManager current;
-	private Properties properties;
+    private static final String SETTINGS_PROPERTY = "./conf/programm.settings";
+    private final Properties properties;
 
-	public static enum KEY {
-		FILEPATH, POTRACE, SIMULATION, CONFIG, LAST_USED
-	}
+    public static enum KEY {
+        FILEPATH, POTRACE, SIMULATION, CONFIG, LAST_USED
+    }
 
-	private SettingsManager() {
-		init();
-	}
+    // Singleton-Instanz über ein Holder-Konstrukt (thread-safe)
+    private static class Holder {
+        private static final SettingsManager INSTANCE = new SettingsManager();
+    }
 
-	public static SettingsManager getCurrent() {
-		if (current == null) {
-			return current = new SettingsManager();
-		}
-		return current;
-	}
+    public static SettingsManager getCurrent() {
+        return Holder.INSTANCE;
+    }
 
-	private void init() {
-		properties = new Properties();
-		if (new File(SETTINGS_PROPERTY).exists()) {
-			try (FileInputStream is = new FileInputStream(Paths.get(SETTINGS_PROPERTY).toFile())) {
-				properties.loadFromXML(is);
-			} catch (Exception exc) {
-				exc.printStackTrace();
-			}
-		}
+    private SettingsManager() {
+        properties = new Properties();
+        loadProperties();
+    }
 
-	}
+    /**
+     * Lädt die Properties aus der XML-Datei, falls vorhanden.
+     */
+    private void loadProperties() {
+        Path settingsPath = Paths.get(SETTINGS_PROPERTY);
+        if (Files.exists(settingsPath)) {
+            try (FileInputStream is = new FileInputStream(settingsPath.toFile())) {
+                properties.loadFromXML(is);
+            } catch (IOException exc) {
+                exc.printStackTrace();
+            }
+        }
+    }
 
-	public synchronized void save() throws IOException {
-		
-		File file = new File(SETTINGS_PROPERTY);
-		File toFile = new File(SETTINGS_PROPERTY + "_"); //$NON-NLS-1$
-		file.renameTo(toFile);
-		try (FileOutputStream output = new FileOutputStream(Paths.get(SETTINGS_PROPERTY).toFile())) {
-			properties.storeToXML(output, null);
-			toFile.delete();
-		} catch (Exception e) {
-			toFile.renameTo(file);
-			e.printStackTrace();
-		}
-	}
+    /**
+     * Speichert die aktuellen Einstellungen in die XML-Datei.
+     * Dabei wird zuerst ein Backup der bestehenden Datei erstellt.
+     *
+     * @throws IOException falls ein Fehler beim Speichern auftritt.
+     */
+    public synchronized void save() throws IOException {
+        Path settingsPath = Paths.get(SETTINGS_PROPERTY);
+        Path backupPath = Files.createTempFile("backup", "");
+        
+        // Erstelle zunächst ein Backup der bestehenden Datei
+        if (Files.exists(settingsPath)) {
+            Files.move(settingsPath, backupPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+        
+        try (OutputStream output = new FileOutputStream(settingsPath.toFile())) {
+            properties.storeToXML(output, null);
+            // Lösche das Backup, wenn das Speichern erfolgreich war
+            Files.deleteIfExists(backupPath);
+        } catch (IOException e) {
+            // Bei einem Fehler wird das Backup zurückverschoben
+            Files.move(backupPath, settingsPath, StandardCopyOption.REPLACE_EXISTING);
+            e.printStackTrace();
+            throw e;
+        }
+    }
 
-	public String getValue(KEY paramKey) {
-		return properties.getProperty(paramKey.name().toLowerCase());
-	}
+    /**
+     * Liefert den in den Properties gespeicherten Wert für den angegebenen Schlüssel.
+     *
+     * @param key Der aufzurufende Schlüssel.
+     * @return Der Wert als String oder null, falls nicht gesetzt.
+     */
+    public synchronized String getValue(KEY key) {
+        return properties.getProperty(key.name().toLowerCase());
+    }
 
-	public void setValue(KEY paramKey, String paramValue) throws IOException {
-		if (paramValue != null && !paramValue.equals(getValue(paramKey))) {
-			properties.setProperty(paramKey.name().toLowerCase(), paramValue);
-		}
-	}
-
+    /**
+     * Setzt den Wert zu einem bestimmten Schlüssel, sofern der neue Wert nicht null ist und sich
+     * vom aktuellen Wert unterscheidet.
+     *
+     * @param key   Der Schlüssel.
+     * @param value Der neue Wert.
+     * @throws IOException Im Falle eines Fehlers beim Speichern (kann aber hier optional sein).
+     */
+    public synchronized void setValue(KEY key, String value) throws IOException {
+        if (value != null && !value.equals(getValue(key))) {
+            properties.setProperty(key.name().toLowerCase(), value);
+        }
+    }
 }
