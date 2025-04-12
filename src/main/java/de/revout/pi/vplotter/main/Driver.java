@@ -33,7 +33,7 @@ public class Driver {
     private float penaway;
     private float pendraw;
     
-    private float servoCurrentPosition=-1;
+    private float servoCurrentPosition=Integer.MIN_VALUE;
 
     private final static int RANGE = 20;
 
@@ -162,11 +162,13 @@ public class Driver {
         motorsOn();
         stop = false;
         pause = false;
+        int commandSize = commands.size();
 
         new Thread(() -> {
             try {
                 scale = calculateScale(width, height);
-                for (int i = 0; i < commands.size(); i++) {
+                ArrayList<Pair> pathPoints = new ArrayList<Pair>();
+                for (int i = 0; i < commandSize; i++) {
                 	final int commandIndex = i;
                     // Bei Pause schrittweise warten
                     while (pause) {
@@ -181,7 +183,7 @@ public class Driver {
                     // Umrechnung der Koordinaten unter Berücksichtigung der Skalierung und des Versatzes
                     Pair toPoint = new Pair((Double.parseDouble(parts[1]) / scale) + minX,
                                              (Double.parseDouble(parts[2]) / scale) + minY);
-                    ArrayList<Pair> pathPoints = getPathPoints(currentPoint, toPoint);
+                    getPathPoints(pathPoints, currentPoint, toPoint);
                     for (Pair point : pathPoints) {
                         if (isInRange(point)) {
                             Pair diff = getDifferences(currentPoint, point);
@@ -190,7 +192,7 @@ public class Driver {
                         }
                     }
                     observerList.forEach(observer ->
-                        observer.currentMove(drawState, currentPoint, commands.size(), commandIndex)
+                        observer.currentMove(drawState, currentPoint, commandSize, commandIndex)
                     );
                 }
             } catch (Exception e) {
@@ -286,13 +288,13 @@ public class Driver {
 
     public void penAway() {
         if (!simulation && gpioInit()) {
-        	smoothMoveServo(penaway,0.1f,50);
+        	smoothMoveServo(penaway,0.5f,50);
         }
     }
 
     public void penDraw() {
         if (!simulation && gpioInit()) {
-        	smoothMoveServo(pendraw,0.1f,50);
+        	smoothMoveServo(pendraw,0.5f,50);
         }
     }
     
@@ -305,7 +307,14 @@ public class Driver {
      * @param pauseMillis     Die Pause in Millisekunden zwischen den einzelnen Schritten.
      */
     private void smoothMoveServo(float targetAngle, float stepSize, long pauseMillis) {
-        // Berechne die Richtung (+1 oder -1)
+        
+    	if(servoCurrentPosition==Integer.MIN_VALUE) {
+    		servoCurrentPosition = targetAngle;
+    		servoMotor.setAngle(servoCurrentPosition);
+    		return;
+    	}
+    	
+    	// Berechne die Richtung (+1 oder -1)
         float direction = targetAngle > servoCurrentPosition ? 1.0f : -1.0f;
         float newPosition = servoCurrentPosition;
         
@@ -469,16 +478,15 @@ public class Driver {
     }
 
     // Erzeugt Zwischenpunkte entlang einer Strecke, um eine glattere Bewegung zu ermöglichen.
-    private ArrayList<Pair> getPathPoints(Pair currentPoint, Pair targetPoint) {
-        ArrayList<Pair> pathPoints = new ArrayList<>();
-        double distance = getDistance(currentPoint, targetPoint);
+    private void getPathPoints(ArrayList<Pair> paramPairList, Pair currentPoint, Pair targetPoint) {
+        paramPairList.clear();
+    	double distance = getDistance(currentPoint, targetPoint);
         double path = step;
         while (path < distance) {
-            pathPoints.add(calculatePoint(path, currentPoint, targetPoint));
+        	paramPairList.add(calculatePoint(path, currentPoint, targetPoint));
             path += step;
         }
-        pathPoints.add(targetPoint);
-        return pathPoints;
+        paramPairList.add(targetPoint);
     }
 
     // Berechnet einen Punkt auf der Strecke zwischen currentPoint und targetPoint bei gegebener Entfernung.
