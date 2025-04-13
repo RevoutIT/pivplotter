@@ -166,7 +166,7 @@ public class LiveView extends JPanel implements DriverMoveObserverIf{
 	}
 	
 	@Override
-	public void currentMove(int paramState, Pair paramToPoint, int paramStepCount, int paramActualStep) {
+	public void currentMove(int paramState, Pair paramToPoint, long paramStepCount, long paramActualStep) {
 		double progress = ((double)paramActualStep/(double)paramStepCount)*100;
 		progressBar.setValue((int)progress);
 	}

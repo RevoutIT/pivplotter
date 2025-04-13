@@ -172,7 +172,12 @@ public class MainView extends JFrame {
         // Plotter-Menüeinträge
         JMenuItem pageLocation = new JMenuItem(Dictionary.getCurrent().getString("MainView.ShowPage"));
         pageLocation.addActionListener(e -> {
-            Driver.getCurrent().showPageLocation();
+            try {
+				changePage(getLiveViewPanel());
+				Driver.getCurrent().showPageLocation();
+			} catch (Exception e1) {
+				e1.printStackTrace();
+			}
             goToStartItem.setEnabled(true);
         });
         plotterMenu.add(pageLocation);
@@ -180,7 +185,12 @@ public class MainView extends JFrame {
         JMenuItem testItem = new JMenuItem(Dictionary.getCurrent().getString("MainView.TEST"));
         testItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Test").charAt(0));
         testItem.addActionListener(e -> {
-            Driver.getCurrent().test();
+            try {
+				changePage(getLiveViewPanel());
+            	Driver.getCurrent().test();
+			} catch (Exception e1) {
+				e1.printStackTrace();
+			}
             goToStartItem.setEnabled(true);
         });
         plotterMenu.add(testItem);

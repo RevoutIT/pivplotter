@@ -91,10 +91,14 @@ public class PlotterPreview extends JPanel{
 		startButton.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
-				VDPConverter vdpConverter = new VDPConverter(Model.getCurrent().getSectionList());
+				try {
 				Driver.getCurrent().loadProperty();
-				Driver.getCurrent().plotte(vdpConverter.getData(), vdpConverter.getMaxWidth(), vdpConverter.getMaxHeight());
 				mainView.changePage(mainView.getLiveViewPanel());
+				Driver.getCurrent().plotte(VDPConverter.buildFromSections(Model.getCurrent().getSectionList()));
+
+				}catch (Exception exc) {
+					exc.printStackTrace();
+				}
 			}
 		});
 		

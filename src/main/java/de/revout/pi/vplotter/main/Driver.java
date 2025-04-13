@@ -1,6 +1,8 @@
 package de.revout.pi.vplotter.main;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -17,6 +19,7 @@ import com.pi4j.io.gpio.digital.DigitalOutput;
 import com.pi4j.io.gpio.digital.DigitalState;
 
 import de.revout.pi.vplotter.converter.Pair;
+import de.revout.pi.vplotter.converter.VDPConverter;
 import de.revout.pi.vplotter.saves.SettingsManager;
 import de.revout.pi.vplotter.saves.VPlotterPropertiesManager;
 import de.revout.pi.vplotter.saves.VPlotterPropertiesManager.KEY;
@@ -86,6 +89,8 @@ public class Driver {
     private DigitalOutput dirRight;
     private DigitalOutput pulLeft;
     private DigitalOutput pulRight;
+    
+	long index=0;
 
     public static Driver getCurrent() {
         if (current == null) {
@@ -133,7 +138,7 @@ public class Driver {
     /**
      * Führt einen Testlauf durch, indem Testdaten erzeugt und geplottet werden.
      */
-    public void test() {
+    public void test() throws Exception{
         List<String> testData = new ArrayList<>();
         loadProperty();
         testData.add("0,0,0");
@@ -144,7 +149,7 @@ public class Driver {
         testData.add("1," + plotterSide[0] + "," + plotterSide[1]);
         testData.add("0," + plotterSide[0] + ",0");
         testData.add("1,0," + plotterSide[1]);
-        plotte(testData, plotterSide[0], plotterSide[1]);
+        plotte(VDPConverter.buildFromStrings(testData));
     }
 
     /**
@@ -154,28 +159,30 @@ public class Driver {
      * @param width    Breite des Plotterbereichs
      * @param height   Höhe des Plotterbereichs
      */
-    public void plotte(List<String> commands, double width, double height) {
-        if (!simulation && !gpioInit()) {
+    public void plotte(VDPConverter paramVdpConverter) {
+        if (!gpioInit() && !simulation) {
             return;
         }
         observerList.forEach(DriverMoveObserverIf::init);
         motorsOn();
         stop = false;
         pause = false;
-        int commandSize = commands.size();
+        index=0;
 
         new Thread(() -> {
             try {
-                scale = calculateScale(width, height);
+                scale = calculateScale(paramVdpConverter.getMaxWidth(), paramVdpConverter.getMaxHeight());
                 ArrayList<Pair> pathPoints = new ArrayList<Pair>();
-                for (int i = 0; i < commandSize; i++) {
-                	final int commandIndex = i;
-                    // Bei Pause schrittweise warten
+                try(BufferedReader reader=Files.newBufferedReader(paramVdpConverter.getFileWithData())){
+                	String line=null;
+                	while((line = reader.readLine())!=null) {
+                		index++;
+                	// Bei Pause schrittweise warten
                     while (pause) {
                         if (stop) return;
                         Thread.sleep(1000);
                     }
-                    String[] parts = commands.get(i).split(",");
+                	String[] parts = line.split(",");
                     int drawState = Integer.parseInt(parts[0]);
                     if (lastDraw != drawState) {
                         draw(drawState);
@@ -192,12 +199,17 @@ public class Driver {
                         }
                     }
                     observerList.forEach(observer ->
-                        observer.currentMove(drawState, currentPoint, commandSize, commandIndex)
+                        observer.currentMove(drawState, currentPoint, paramVdpConverter.getSize(), index)
                     );
-                }
+                }}
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
+            	try {
+					Files.deleteIfExists(paramVdpConverter.getFileWithData());
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
                 finish();
             }
         }).start();
@@ -264,7 +276,6 @@ public class Driver {
             } catch (Throwable exc) {
                 gpio = false;
                 simulation = true;
-                exc.printStackTrace();
             }
         }
         return gpio;
@@ -384,7 +395,7 @@ public class Driver {
         lastDraw = drawState;
     }
 
-    public void showPageLocation() {
+    public void showPageLocation() throws Exception{
         List<String> testData = new ArrayList<>();
         loadProperty();
         // Offset-Anpassungen
@@ -395,7 +406,15 @@ public class Driver {
         testData.add("1,0,15");
         testData.add("0," + (paperWidth - 15) + ",0");
         testData.add("1," + paperWidth + ",0");
-        plotte(testData, paperWidth, paperHeight);
+        testData.add("1," + paperWidth + ",15");
+        testData.add("0," + paperWidth + ","+(paperHeight - 15));
+        testData.add("1," + paperWidth + ","+paperHeight);
+        testData.add("1," + (paperWidth-15) + ","+paperHeight);
+        testData.add("0," + 15 + ","+paperHeight);
+        testData.add("1,0,"+paperHeight);
+        testData.add("1,0," + (paperHeight-15));
+        testData.add("0,0,0");
+        plotte(VDPConverter.buildFromStrings(testData));
     }
 
     // Prüft, ob der gegebene Punkt noch innerhalb des erlaubten Bereichs liegt.
