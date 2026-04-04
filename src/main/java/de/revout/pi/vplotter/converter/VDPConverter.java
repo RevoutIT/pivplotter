@@ -36,6 +36,7 @@ public class VDPConverter {
 	public static VDPConverter buildFromStrings(List<String> paramLineList) throws Exception{
 		VDPConverter converter = new VDPConverter();
 		converter.fileWithData = Files.createTempFile("VDPData", "");
+		
 		try(BufferedWriter writer = Files.newBufferedWriter(converter.fileWithData,StandardOpenOption.CREATE)){		
 			for (String s : paramLineList) {
 				converter.maxWidth = Math.max(converter.maxWidth, Double.parseDouble(s.split(",")[1]));

@@ -160,7 +160,7 @@ public class Driver {
      * @param height   Höhe des Plotterbereichs
      */
     public void plotte(VDPConverter paramVdpConverter) {
-        if (!gpioInit() && !simulation) {
+        if (!simulation && !gpioInit()) {
             return;
         }
         observerList.forEach(DriverMoveObserverIf::init);
@@ -276,6 +276,7 @@ public class Driver {
             } catch (Throwable exc) {
                 gpio = false;
                 simulation = true;
+                exc.printStackTrace();
             }
         }
         return gpio;
@@ -414,6 +415,7 @@ public class Driver {
         testData.add("1,0,"+paperHeight);
         testData.add("1,0," + (paperHeight-15));
         testData.add("0,0,0");
+
         plotte(VDPConverter.buildFromStrings(testData));
     }
 

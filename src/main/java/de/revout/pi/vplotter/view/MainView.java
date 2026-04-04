@@ -173,7 +173,6 @@ public class MainView extends JFrame {
         JMenuItem pageLocation = new JMenuItem(Dictionary.getCurrent().getString("MainView.ShowPage"));
         pageLocation.addActionListener(e -> {
             try {
-				changePage(getLiveViewPanel());
 				Driver.getCurrent().showPageLocation();
 			} catch (Exception e1) {
 				e1.printStackTrace();
@@ -186,8 +185,7 @@ public class MainView extends JFrame {
         testItem.setMnemonic(Dictionary.getCurrent().getString("MainView.Mnemonic.Test").charAt(0));
         testItem.addActionListener(e -> {
             try {
-				changePage(getLiveViewPanel());
-            	Driver.getCurrent().test();
+				Driver.getCurrent().test();
 			} catch (Exception e1) {
 				e1.printStackTrace();
 			}
