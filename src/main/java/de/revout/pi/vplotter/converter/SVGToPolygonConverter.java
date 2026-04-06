@@ -1,437 +1,1006 @@
 package de.revout.pi.vplotter.converter;
 
+import java.awt.geom.AffineTransform;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.xpath.XPath;
-import javax.xml.xpath.XPathConstants;
-import javax.xml.xpath.XPathFactory;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-public class SVGToPolygonConverter {
+/**
+ * Konvertiert SVG-<path>-Elemente in absolute Polygon-/Liniensegmente.
+ *
+ * <p>Unterstützte SVG-Pfadbefehle:
+ * M, m, Z, z, L, l, H, h, V, v, C, c, S, s, Q, q, T, t, A, a
+ *
+ * <p>Unterstützte Transformationen:
+ * matrix, translate, scale, rotate, skewX, skewY
+ *
+ * <p>Die Ausgabe enthält Zeilen im Format:
+ * M x y
+ * L x y x y ...
+ *
+ * <p>Jede Koordinate ist bereits in das endgültige Benutzerkoordinatensystem
+ * transformiert, einschließlich root-viewBox, preserveAspectRatio sowie
+ * vererbter transform-Attribute auf svg/g/path.
+ */
+public final class SVGToPolygonConverter {
 
-    // Dimensionen und Transformationen der SVG
-    private double width = 0;
-    private double height = 0;
-    private double translateX = 0;
-    private double translateY = 0;
-    private double scaleX = 1;
-    private double scaleY = 1;
-    private double minX = 0;
-    private double maxX = 0;
-    private double minY = 0;
-    private double maxY = 0;
+    private static final Pattern LENGTH_NUMBER_PATTERN =
+            Pattern.compile("[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?");
 
-    /**
-     * Wandelt das gegebene SVG-Dokument (Pfad) in eine Liste von absoluten
-     * Polygon-Pfad-Daten um.
-     *
-     * @param paramPathToSVG Pfad zur SVG-Datei
-     * @return Liste der konvertierten Pfaddaten
-     */
-    public List<String> convertSVG(Path paramPathToSVG) {
-        // Reset der globalen Variablen
-        width = 0;
-        height = 0;
-        translateX = 0;
-        translateY = 0;
-        scaleX = 1;
-        scaleY = 1;
-        minX = 0;
-        maxX = 0;
-        minY = 0;
-        maxY = 0;
+    private static final Pattern TRANSFORM_PATTERN =
+            Pattern.compile("([a-zA-Z]+)\\s*\\(([^)]*)\\)");
 
-        try (InputStream fileIS = Files.newInputStream(paramPathToSVG, StandardOpenOption.READ)) {
-            // XML-Dokument einlesen
-            DocumentBuilderFactory builderFactory = DocumentBuilderFactory.newInstance();
-            DocumentBuilder builder = builderFactory.newDocumentBuilder();
-            Document xmlDocument = builder.parse(fileIS);
-            Element root = xmlDocument.getDocumentElement();
+    private static final Pattern PATH_TOKEN_PATTERN =
+            Pattern.compile(
+                    "[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?");
 
-            // Lese width und height (ohne Einheiten)
-            width = parseDoubleClean(root.getAttribute("width"));
-            height = parseDoubleClean(root.getAttribute("height"));
+    private static final int DEFAULT_CURVE_SEGMENTS = 20;
+    private static final int DEFAULT_ARC_SEGMENTS = 24;
 
-            // Transformationswerte aus dem ersten <g>-Element auslesen (falls vorhanden)
-            NodeList gList = root.getElementsByTagName("g");
-            if (gList.getLength() > 0) {
-                Node gNode = gList.item(0);
-                NamedNodeMap attrs = gNode.getAttributes();
-                Node transformAttr = attrs.getNamedItem("transform");
-                if (transformAttr != null) {
-                    String transformStr = transformAttr.getNodeValue();
-                    double[] translate = getValuePair(transformStr, "translate", 0);
-                    double[] scale = getValuePair(transformStr, "scale", 1);
-                    translateX = translate[0];
-                    translateY = translate[1];
-                    scaleX = scale[0];
-                    scaleY = scale[1];
-                }
-            } else {
-                translateX = 0;
-                translateY = 0;
-                scaleX = 1;
-                scaleY = 1;
+    private double width;
+    private double height;
+    private double minX;
+    private double minY;
+    private double maxX;
+    private double maxY;
+
+    public List<String> convertSVG(Path svgPath) {
+        Objects.requireNonNull(svgPath, "svgPath must not be null");
+        resetBounds();
+
+        try (InputStream inputStream = Files.newInputStream(svgPath)) {
+            Document document = parseXml(inputStream);
+            Element root = document.getDocumentElement();
+            if (root == null || !"svg".equalsIgnoreCase(root.getLocalName() != null ? root.getLocalName() : root.getNodeName())) {
+                return Collections.emptyList();
             }
 
-            // Suche alle <path>-Elemente mittels XPath
-            XPath xPath = XPathFactory.newInstance().newXPath();
-            String expression = "//path";
-            NodeList nodeList = (NodeList) xPath.compile(expression).evaluate(xmlDocument, XPathConstants.NODESET);
-            List<String> dataList = new ArrayList<>();
-            for (int i = 0; i < nodeList.getLength(); i++) {
-                Node node = nodeList.item(i);
-                String pathData = node.getAttributes().getNamedItem("d").getNodeValue();
-                dataList.addAll(getDataFromPath(pathData));
-            }
+            SvgViewport viewport = readRootViewport(root);
+            this.width = viewport.width();
+            this.height = viewport.height();
 
-            // Umrechnung in absolute Koordinaten
-            List<String> absolutList = convertToAbsolute(dataList, width, height);
-            // Korrigiere Werte aus negativen Bereichen (falls erforderlich)
-            return adjustForNegativeCoordinates(absolutList);
-        } catch (Exception e) {
-            e.printStackTrace();
+            AffineTransform rootTransform = new AffineTransform();
+            rootTransform.concatenate(viewport.viewBoxTransform());
+            rootTransform.concatenate(parseTransformAttribute(root.getAttribute("transform")));
+
+            List<String> result = new ArrayList<>();
+            traverse(root, rootTransform, result);
+
+            return Collections.unmodifiableList(result);
+        } catch (Exception ex) {
+            throw new IllegalStateException("SVG konnte nicht verarbeitet werden: " + svgPath, ex);
         }
-        return Collections.emptyList();
     }
 
-    /**
-     * Entfernt alle Buchstaben aus einem Zahlen-String und liefert diesen als double.
-     */
-    private double parseDoubleClean(String value) {
-        return Double.parseDouble(value.replaceAll("\\p{Alpha}", ""));
-    }
-
-    /**
-     * Extrahiert aus einem Transformations-String (z. B. "translate(10,20) scale(2)")
-     * ein Zahlenpaar für den angegebenen Schlüssel.
-     *
-     * @param paramString Der Transformations-String
-     * @param paramKey    Der zu suchende Schlüssel, z. B. "translate" oder "scale"
-     * @param paramDefault Standardwert für beide Werte, falls nicht gefunden
-     * @return Ein Array mit zwei double-Werten
-     */
-    private double[] getValuePair(String paramString, String paramKey, double paramDefault) {
-        double[] result = new double[] { paramDefault, paramDefault };
-        int startIndex = paramString.indexOf(paramKey);
-        if (startIndex > -1) {
-            int endIndex = paramString.indexOf(")", startIndex);
-            if (endIndex > startIndex) {
-                String content = paramString.substring(startIndex + paramKey.length() + 1, endIndex);
-                // Splitte anhand von Komma und/oder Leerzeichen und filtere leere Strings
-                String[] parts = content.split("[,\\s]+");
-                try {
-                    result = Arrays.stream(parts).mapToDouble(Double::parseDouble).toArray();
-                } catch (NumberFormatException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Wandelt die gesammelten Pfaddaten aus relativen SVG-Koordinaten in absolute Koordinaten um.
-     */
-    private List<String> convertToAbsolute(List<String> dataList, double svgWidth, double svgHeight) {
-        List<String> absolutList = new ArrayList<>();
-        double beginX = 0, beginY = 0, lastMoveX = 0, lastMoveY = 0;
-        boolean endWithZ;
-        BezierCurve bezierCurve = new BezierCurve(20);
-
-        for (String rowData : dataList) {
-            rowData = rowData.trim();
-            int length = rowData.length();
-            endWithZ = false;
-            if (rowData.endsWith("z") || rowData.endsWith("Z")) {
-                endWithZ = true;
-                length--; // Ignoriere das letzte Zeichen
-            }
-            String command = rowData.substring(0, 1);
-            String newLine = command.toUpperCase();
-            // Für manche Befehle wird die Abfolge zu "L" geändert
-            if (command.matches("[cCvVHh]")) {
-                newLine = "L";
-            }
-            rowData = rowData.substring(1, length).replaceAll(",", " ");
-            double[] values = Arrays.stream(rowData.split("\\s+"))
-                                    .mapToDouble(Double::parseDouble)
-                                    .toArray();
-            double x = beginX, y = beginY;
-            for (int i = 0; i < values.length; i += 2) {
-                switch (command) {
-                    case "M":
-                        x = values[i];
-                        y = values[i + 1];
-                        beginX = x;
-                        beginY = y;
-                        lastMoveX = x;
-                        lastMoveY = y;
-                        newLine += " " + convertX(svgWidth, x, translateX, scaleX)
-                                + " " + convertY(svgHeight, y, translateY, scaleY);
-                        newLine = newLine.trim();
-                        absolutList.add(newLine);
-                        command = "L"; // Folgebefehle als "L"
-                        newLine = "";
-                        break;
-                    case "m":
-                        x = beginX + values[i];
-                        y = beginY + values[i + 1];
-                        beginX = x;
-                        beginY = y;
-                        lastMoveX = x;
-                        lastMoveY = y;
-                        newLine += " " + convertX(svgWidth, x, translateX, scaleX)
-                                + " " + convertY(svgHeight, y, translateY, scaleY);
-                        newLine = newLine.trim();
-                        absolutList.add(newLine);
-                        command = "l"; // Folgebefehle als relativ
-                        newLine = "";
-                        break;
-                    case "L":
-                    case "l":
-                        // Bei L oder l werden direkte Koordinaten übernommen; bei "l" werden diese relativ addiert.
-                        if ("L".equals(command)) {
-                            x = values[i];
-                            y = values[i + 1];
-                        } else { // "l"
-                            x = beginX + values[i];
-                            y = beginY + values[i + 1];
-                        }
-                        beginX = x;
-                        beginY = y;
-                        if (newLine.isEmpty()) {
-                            newLine = "L";
-                        }
-                        newLine += " " + convertX(svgWidth, x, translateX, scaleX)
-                                + " " + convertY(svgHeight, y, translateY, scaleY);
-                        break;
-                    case "V":
-                    case "v":
-                        // Vertikale Linien: nur y wird gesetzt; x bleibt gleich.
-                        if ("V".equals(command)) {
-                            y = values[i];
-                        } else {
-                            y = beginY + values[i];
-                        }
-                        beginY = y;
-                        if (newLine.isEmpty()) {
-                            newLine = "L";
-                        }
-                        newLine += " " + convertX(svgWidth, beginX, translateX, scaleX)
-                                + " " + convertY(svgHeight, y, translateY, scaleY);
-                        break;
-                    case "H":
-                    case "h":
-                        // Horizontale Linien: nur x wird gesetzt; y bleibt konstant.
-                        if ("H".equals(command)) {
-                            x = values[i];
-                        } else {
-                            x = beginX + values[i];
-                        }
-                        beginX = x;
-                        if (newLine.isEmpty()) {
-                            newLine = "L";
-                        }
-                        newLine += " " + convertX(svgWidth, x, translateX, scaleX)
-                                + " " + convertY(svgHeight, beginY, translateY, scaleY);
-                        break;
-                    case "C":
-                        // Kubische Bézierkurve; nimm 6 Werte (drei Punkte)
-                        double x1 = values[i];
-                        double y1 = values[i + 1];
-                        double x2 = values[i + 2];
-                        double y2 = values[i + 3];
-                        x = values[i + 4];
-                        y = values[i + 5];
-                        i += 4; // Überspringe zusätzliche Werte
-                        double[] bezPoints = bezierCurve.bezier2D(new double[]{beginX, beginY, x1, y1, x2, y2, x, y});
-                        // Beginne ab dem zweiten Punkt (Index 2)
-                        for (int j = 2; j < bezPoints.length; j += 2) {
-                            newLine += " " + convertX(svgWidth, bezPoints[j], translateX, scaleX)
-                                    + " " + convertY(svgHeight, bezPoints[j + 1], translateY, scaleY);
-                        }
-                        beginX = x;
-                        beginY = y;
-                        break;
-                    case "c":
-                        // Relative kubische Bézierkurve
-                        double rx1 = beginX + values[i];
-                        double ry1 = beginY + values[i + 1];
-                        double rx2 = beginX + values[i + 2];
-                        double ry2 = beginY + values[i + 3];
-                        x = beginX + values[i + 4];
-                        y = beginY + values[i + 5];
-                        i += 4;
-                        double[] bezRelPoints = bezierCurve.bezier2D(new double[]{beginX, beginY, rx1, ry1, rx2, ry2, x, y});
-                        for (int j = 2; j < bezRelPoints.length; j += 2) {
-                            newLine += " " + convertX(svgWidth, bezRelPoints[j], translateX, scaleX)
-                                    + " " + convertY(svgHeight, bezRelPoints[j + 1], translateY, scaleY);
-                        }
-                        beginX = x;
-                        beginY = y;
-                        break;
-                    default:
-                        // Unbekannte Befehle werden ignoriert
-                        break;
-                }
-            }
-            newLine = newLine.trim();
-            if (!newLine.isEmpty()) {
-                absolutList.add(newLine);
-            }
-            if (endWithZ) {
-                absolutList.add("L" + convertX(svgWidth, lastMoveX, translateX, scaleX) + " " +
-                                  convertY(svgHeight, lastMoveY, translateY, scaleY));
-                beginX = lastMoveX;
-                beginY = lastMoveY;
-            }
-        }
-
-        return absolutList;
-    }
-
-    /**
-     * Passt die absoluten Pfaddaten an, falls negative Werte vorhanden sind.
-     * Es werden Korrekturwerte (xCor, yCor) berechnet und auf alle Koordinaten addiert.
-     */
-    private List<String> adjustForNegativeCoordinates(List<String> absolutList) {
-        // Setze Breiten/Hohen basierend auf bisherigen Min-/Max-Werten
-        double xCor = 0, yCor = 0;
-        if (minX < 0) {
-            xCor = Math.abs(minX) + 1;
-        }
-        if (minY < 0) {
-            yCor = Math.abs(minY) + 1;
-        }
-
-        List<String> result = new ArrayList<>();
-        for (String row : absolutList) {
-            // Der erste Buchstabe ist der Befehlsbuchstabe
-            String command = row.substring(0, 1);
-            // Parse die restlichen Werte
-            double[] values = Arrays.stream(row.substring(1).trim().split("\\s+"))
-            		.mapToDouble(Double::parseDouble)
-                                    .toArray();
-            String newLine = command;
-            for (int i = 0; i < values.length; i += 2) {
-                newLine += " " + (values[i] + xCor) + " " + (values[i + 1] + yCor);
-            }
-            result.add(newLine.trim());
-        }
-        return result;
-    }
-
-    /**
-     * Extrahiert Pfaddaten aus dem "d"-Attribut eines SVG-<path>-Elements.
-     *
-     * @param pathData Der Inhalt des d-Attributs
-     * @return Liste von Datenzeilen, die den Befehlen entsprechen.
-     */
-    private List<String> getDataFromPath(String pathData) {
-        List<String> result = new ArrayList<>();
-        // Statt StringTokenizer wird split genutzt, um Tokens anhand von Leerzeichen zu erhalten.
-        String[] tokens = pathData.split("\\s+");
-        String dataRow = "";
-        boolean commandFlag = false;
-        for (String token : tokens) {
-            if (token.matches("[MmLlCcVvHh].*")) {
-                if (!dataRow.isEmpty()) {
-                    result.add(dataRow);
-                }
-                dataRow = token;
-                // Wenn das Token exakt einen Buchstaben enthält, gilt es als reiner Befehl
-                commandFlag = token.matches("[MmLlCcVvHh]");
-            } else if (token.matches(".*[zZ]")) {
-                if (token.matches("[zZ]")) {
-                    dataRow += token;
-                } else {
-                    dataRow += " " + token.replace(',', ' ');
-                }
-                result.add(dataRow);
-                dataRow = "";
-                commandFlag = false;
-            } else if (token.matches("[\\-0-9].*")) {
-                String prefix = commandFlag ? "" : " ";
-                dataRow += prefix + token.replace(',', ' ');
-                commandFlag = false;
-            }
-        }
-        if (!dataRow.isEmpty()) {
-            result.add(dataRow);
-        }
-        return result;
-    }
-
-    private void setMinMaxX(double value) {
-        minX = Math.min(minX, value);
-        maxX = Math.max(maxX, value);
-    }
-
-    private void setMinMaxY(double value) {
-        minY = Math.min(minY, value);
-        maxY = Math.max(maxY, value);
-    }
-
-    private double convertX(double maxValue, double value, double translate, double scale) {
-        double result;
-        if (scale > 0) {
-            result = (value + translate) * scale;
-        } else {
-            result = maxValue - (value + translate) * -scale;
-        }
-        setMinMaxX(result);
-        return result;
-    }
-
-    private double convertY(double maxValue, double value, double translate, double scale) {
-        double result;
-        if (scale > 0) {
-            result = (value + translate) * scale;
-        } else {
-            result = maxValue - (value + translate) * -scale;
-        }
-        setMinMaxY(result);
-        return result;
-    }
-
-    // Zugriffsmethoden für die ermittelten SVG-Dimensionen und Transformationen
     public double getWidth() {
         return width;
     }
+
     public double getHeight() {
         return height;
     }
-    public double getTranslateX() {
-        return translateX;
+
+    public double getMinX() {
+        return minX;
     }
-    public double getTranslateY() {
-        return translateY;
+
+    public double getMinY() {
+        return minY;
     }
-    public double getScaleX() {
-        return scaleX;
-    }
-    public double getScaleY() {
-        return scaleY;
-    }
+
     public double getMaxX() {
         return maxX;
     }
+
     public double getMaxY() {
         return maxY;
     }
-}
+
+    private void traverse(Element element, AffineTransform inheritedTransform, List<String> output) {
+        String localName = element.getLocalName();
+        if (localName == null || localName.isBlank()) {
+            localName = element.getNodeName();
+        }
+
+        AffineTransform currentTransform = new AffineTransform(inheritedTransform);
+
+        if (!"svg".equalsIgnoreCase(localName)) {
+            currentTransform.concatenate(parseTransformAttribute(element.getAttribute("transform")));
+        }
+
+        if ("path".equalsIgnoreCase(localName)) {
+            String d = element.getAttribute("d");
+            if (d != null && !d.isBlank()) {
+                output.addAll(convertPathToLines(d, currentTransform));
+            }
+        }
+
+        NodeList children = element.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child instanceof Element childElement) {
+                traverse(childElement, currentTransform, output);
+            }
+        }
+    }
+
+    private Document parseXml(InputStream inputStream) throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setExpandEntityReferences(false);
+        factory.setXIncludeAware(false);
+        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+
+        try {
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        } catch (IllegalArgumentException ignored) {
+            // Optional je nach JAXP-Implementierung.
+        }
+
+        try {
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        } catch (Exception ignored) {
+            // Optional je nach Parser-Implementierung.
+        }
+
+        try {
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        } catch (Exception ignored) {
+            // Optional je nach Parser-Implementierung.
+        }
+
+        try {
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        } catch (Exception ignored) {
+            // Optional je nach Parser-Implementierung.
+        }
+
+        DocumentBuilder builder = factory.newDocumentBuilder();
+        return builder.parse(inputStream);
+    }
+
+    private List<String> convertPathToLines(String d, AffineTransform transform) {
+        PathTokenizer tokenizer = new PathTokenizer(d);
+        List<String> result = new ArrayList<>();
+
+        Point current = new Point(0.0, 0.0);
+        Point subpathStart = new Point(0.0, 0.0);
+        Point lastCubicControl = null;
+        Point lastQuadraticControl = null;
+        char command = 0;
+
+        while (tokenizer.hasNext()) {
+            if (tokenizer.peekIsCommand()) {
+                command = tokenizer.nextCommand();
+            } else if (command == 0) {
+                throw new IllegalArgumentException("Ungültige SVG-Pfaddaten: erster Token ist kein Befehl.");
+            }
+
+            switch (command) {
+                case 'M': {
+                    Point p = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                    current = p;
+                    subpathStart = p;
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    appendMove(result, transformPoint(transform, p));
+
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    command = 'L';
+                    break;
+                }
+                case 'm': {
+                    Point p = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                    current = p;
+                    subpathStart = p;
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    appendMove(result, transformPoint(transform, p));
+
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    command = 'l';
+                    break;
+                }
+                case 'L': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    break;
+                }
+                case 'l': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    break;
+                }
+                case 'H': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = new Point(tokenizer.nextNumber(), current.y());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    break;
+                }
+                case 'h': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = current.add(tokenizer.nextNumber(), 0.0);
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    break;
+                }
+                case 'V': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = new Point(current.x(), tokenizer.nextNumber());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    break;
+                }
+                case 'v': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point lineEnd = current.add(0.0, tokenizer.nextNumber());
+                        appendLine(result, List.of(
+                                transformPoint(transform, current),
+                                transformPoint(transform, lineEnd)
+                        ));
+                        current = lineEnd;
+                    }
+                    lastCubicControl = null;
+                    lastQuadraticControl = null;
+                    break;
+                }
+                case 'C': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c1 = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point c2 = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point end = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenCubic(current, c1, c2, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastCubicControl = c2;
+                        lastQuadraticControl = null;
+                    }
+                    break;
+                }
+                case 'c': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c1 = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point c2 = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point end = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenCubic(current, c1, c2, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastCubicControl = c2;
+                        lastQuadraticControl = null;
+                    }
+                    break;
+                }
+                case 'S': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c1 = lastCubicControl == null ? current : reflect(lastCubicControl, current);
+                        Point c2 = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point end = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenCubic(current, c1, c2, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastCubicControl = c2;
+                        lastQuadraticControl = null;
+                    }
+                    break;
+                }
+                case 's': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c1 = lastCubicControl == null ? current : reflect(lastCubicControl, current);
+                        Point c2 = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point end = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenCubic(current, c1, c2, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastCubicControl = c2;
+                        lastQuadraticControl = null;
+                    }
+                    break;
+                }
+                case 'Q': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point end = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenQuadratic(current, c, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastQuadraticControl = c;
+                        lastCubicControl = null;
+                    }
+                    break;
+                }
+                case 'q': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+                        Point end = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenQuadratic(current, c, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastQuadraticControl = c;
+                        lastCubicControl = null;
+                    }
+                    break;
+                }
+                case 'T': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c = lastQuadraticControl == null ? current : reflect(lastQuadraticControl, current);
+                        Point end = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenQuadratic(current, c, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastQuadraticControl = c;
+                        lastCubicControl = null;
+                    }
+                    break;
+                }
+                case 't': {
+                    while (tokenizer.hasNextNumber()) {
+                        Point c = lastQuadraticControl == null ? current : reflect(lastQuadraticControl, current);
+                        Point end = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenQuadratic(current, c, end, DEFAULT_CURVE_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastQuadraticControl = c;
+                        lastCubicControl = null;
+                    }
+                    break;
+                }
+                case 'A': {
+                    while (tokenizer.hasNextNumber()) {
+                        double rx = tokenizer.nextNumber();
+                        double ry = tokenizer.nextNumber();
+                        double xAxisRotation = tokenizer.nextNumber();
+                        int largeArcFlag = tokenizer.nextFlag();
+                        int sweepFlag = tokenizer.nextFlag();
+                        Point end = new Point(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenArc(
+                                current, rx, ry, xAxisRotation, largeArcFlag != 0, sweepFlag != 0, end, DEFAULT_ARC_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastQuadraticControl = null;
+                        lastCubicControl = null;
+                    }
+                    break;
+                }
+                case 'a': {
+                    while (tokenizer.hasNextNumber()) {
+                        double rx = tokenizer.nextNumber();
+                        double ry = tokenizer.nextNumber();
+                        double xAxisRotation = tokenizer.nextNumber();
+                        int largeArcFlag = tokenizer.nextFlag();
+                        int sweepFlag = tokenizer.nextFlag();
+                        Point end = current.add(tokenizer.nextNumber(), tokenizer.nextNumber());
+
+                        List<Point> polyline = flattenArc(
+                                current, rx, ry, xAxisRotation, largeArcFlag != 0, sweepFlag != 0, end, DEFAULT_ARC_SEGMENTS);
+                        appendLine(result, transformPoints(transform, polyline));
+
+                        current = end;
+                        lastQuadraticControl = null;
+                        lastCubicControl = null;
+                    }
+                    break;
+                }
+                case 'Z':
+                case 'z': {
+                    appendLine(result, List.of(
+                            transformPoint(transform, current),
+                            transformPoint(transform, subpathStart)
+                    ));
+                    current = subpathStart;
+                    lastQuadraticControl = null;
+                    lastCubicControl = null;
+                    break;
+                }
+                default:
+                    throw new IllegalArgumentException("Nicht unterstützter Pfadbefehl: " + command);
+            }
+        }
+
+        return result;
+    }
+
+    private SvgViewport readRootViewport(Element root) {
+        double svgWidth = parseLength(root.getAttribute("width"), 0.0);
+        double svgHeight = parseLength(root.getAttribute("height"), 0.0);
+
+        String viewBoxValue = root.getAttribute("viewBox");
+        String preserveAspectRatioValue = root.getAttribute("preserveAspectRatio");
+
+        if (viewBoxValue == null || viewBoxValue.isBlank()) {
+            return new SvgViewport(svgWidth, svgHeight, new AffineTransform());
+        }
+
+        double[] vb = parseNumberList(viewBoxValue);
+        if (vb.length != 4) {
+            throw new IllegalArgumentException("Ungültiges viewBox-Attribut: " + viewBoxValue);
+        }
+
+        double minX = vb[0];
+        double minY = vb[1];
+        double vbWidth = vb[2];
+        double vbHeight = vb[3];
+
+        if (vbWidth <= 0 || vbHeight <= 0) {
+            throw new IllegalArgumentException("viewBox width/height müssen > 0 sein.");
+        }
+
+        if (svgWidth <= 0) {
+            svgWidth = vbWidth;
+        }
+        if (svgHeight <= 0) {
+            svgHeight = vbHeight;
+        }
+
+        AffineTransform viewBoxTransform =
+                buildViewBoxTransform(minX, minY, vbWidth, vbHeight, svgWidth, svgHeight, preserveAspectRatioValue);
+
+        return new SvgViewport(svgWidth, svgHeight, viewBoxTransform);
+    }
+
+    private AffineTransform buildViewBoxTransform(
+            double vbMinX,
+            double vbMinY,
+            double vbWidth,
+            double vbHeight,
+            double viewportWidth,
+            double viewportHeight,
+            String preserveAspectRatio) {
+
+        if (preserveAspectRatio == null || preserveAspectRatio.isBlank()) {
+            preserveAspectRatio = "xMidYMid meet";
+        }
+
+        String[] parts = preserveAspectRatio.trim().split("\\s+");
+        String align = parts.length > 0 ? parts[0] : "xMidYMid";
+        String meetOrSlice = parts.length > 1 ? parts[1] : "meet";
+
+        double scaleX = viewportWidth / vbWidth;
+        double scaleY = viewportHeight / vbHeight;
+        double translateX;
+        double translateY;
+
+        if ("none".equals(align)) {
+            translateX = -vbMinX * scaleX;
+            translateY = -vbMinY * scaleY;
+            AffineTransform at = new AffineTransform();
+            at.translate(translateX, translateY);
+            at.scale(scaleX, scaleY);
+            return at;
+        }
+
+        double uniformScale = "slice".equals(meetOrSlice)
+                ? Math.max(scaleX, scaleY)
+                : Math.min(scaleX, scaleY);
+
+        double viewWidth = vbWidth * uniformScale;
+        double viewHeight = vbHeight * uniformScale;
+
+        double extraX = viewportWidth - viewWidth;
+        double extraY = viewportHeight - viewHeight;
+
+        double alignX = switch (align) {
+            case "xMinYMin", "xMinYMid", "xMinYMax" -> 0.0;
+            case "xMidYMin", "xMidYMid", "xMidYMax" -> extraX / 2.0;
+            case "xMaxYMin", "xMaxYMid", "xMaxYMax" -> extraX;
+            default -> extraX / 2.0;
+        };
+
+        double alignY = switch (align) {
+            case "xMinYMin", "xMidYMin", "xMaxYMin" -> 0.0;
+            case "xMinYMid", "xMidYMid", "xMaxYMid" -> extraY / 2.0;
+            case "xMinYMax", "xMidYMax", "xMaxYMax" -> extraY;
+            default -> extraY / 2.0;
+        };
+
+        translateX = alignX - (vbMinX * uniformScale);
+        translateY = alignY - (vbMinY * uniformScale);
+
+        AffineTransform at = new AffineTransform();
+        at.translate(translateX, translateY);
+        at.scale(uniformScale, uniformScale);
+        return at;
+    }
+
+    private AffineTransform parseTransformAttribute(String transformValue) {
+        AffineTransform result = new AffineTransform();
+        if (transformValue == null || transformValue.isBlank()) {
+            return result;
+        }
+
+        Matcher matcher = TRANSFORM_PATTERN.matcher(transformValue);
+        while (matcher.find()) {
+            String type = matcher.group(1);
+            double[] values = parseNumberList(matcher.group(2));
+            AffineTransform operation = switch (type) {
+                case "matrix" -> parseMatrixTransform(values);
+                case "translate" -> parseTranslateTransform(values);
+                case "scale" -> parseScaleTransform(values);
+                case "rotate" -> parseRotateTransform(values);
+                case "skewX" -> parseSkewXTransform(values);
+                case "skewY" -> parseSkewYTransform(values);
+                default -> throw new IllegalArgumentException("Nicht unterstützte Transformation: " + type);
+            };
+            result.concatenate(operation);
+        }
+
+        return result;
+    }
+
+    private AffineTransform parseMatrixTransform(double[] v) {
+        if (v.length != 6) {
+            throw new IllegalArgumentException("matrix(...) erwartet 6 Werte.");
+        }
+        return new AffineTransform(v[0], v[1], v[2], v[3], v[4], v[5]);
+    }
+
+    private AffineTransform parseTranslateTransform(double[] v) {
+        if (v.length != 1 && v.length != 2) {
+            throw new IllegalArgumentException("translate(...) erwartet 1 oder 2 Werte.");
+        }
+        double tx = v[0];
+        double ty = v.length == 2 ? v[1] : 0.0;
+        return AffineTransform.getTranslateInstance(tx, ty);
+    }
+
+    private AffineTransform parseScaleTransform(double[] v) {
+        if (v.length != 1 && v.length != 2) {
+            throw new IllegalArgumentException("scale(...) erwartet 1 oder 2 Werte.");
+        }
+        double sx = v[0];
+        double sy = v.length == 2 ? v[1] : sx;
+        return AffineTransform.getScaleInstance(sx, sy);
+    }
+
+    private AffineTransform parseRotateTransform(double[] v) {
+        if (v.length != 1 && v.length != 3) {
+            throw new IllegalArgumentException("rotate(...) erwartet 1 oder 3 Werte.");
+        }
+        double angleRad = Math.toRadians(v[0]);
+        if (v.length == 1) {
+            return AffineTransform.getRotateInstance(angleRad);
+        }
+        return AffineTransform.getRotateInstance(angleRad, v[1], v[2]);
+    }
+
+    private AffineTransform parseSkewXTransform(double[] v) {
+        if (v.length != 1) {
+            throw new IllegalArgumentException("skewX(...) erwartet 1 Wert.");
+        }
+        return AffineTransform.getShearInstance(Math.tan(Math.toRadians(v[0])), 0.0);
+    }
+
+    private AffineTransform parseSkewYTransform(double[] v) {
+        if (v.length != 1) {
+            throw new IllegalArgumentException("skewY(...) erwartet 1 Wert.");
+        }
+        return AffineTransform.getShearInstance(0.0, Math.tan(Math.toRadians(v[0])));
+    }
+
+    private void appendMove(List<String> output, Point point) {
+        updateBounds(point);
+        output.add("M " + format(point.x()) + " " + format(point.y()));
+    }
+
+    private void appendLine(List<String> output, List<Point> points) {
+        if (points.size() < 2) {
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder("L");
+        boolean first = true;
+        for (Point p : points) {
+            if (!first) {
+                sb.append(' ');
+            } else {
+                sb.append(' ');
+                first = false;
+            }
+            updateBounds(p);
+            sb.append(format(p.x())).append(' ').append(format(p.y()));
+        }
+        output.add(sb.toString());
+    }
+
+    private List<Point> transformPoints(AffineTransform transform, List<Point> points) {
+        List<Point> result = new ArrayList<>(points.size());
+        for (Point p : points) {
+            result.add(transformPoint(transform, p));
+        }
+        return result;
+    }
+
+    private Point transformPoint(AffineTransform transform, Point point) {
+        double[] src = { point.x(), point.y() };
+        double[] dst = new double[2];
+        transform.transform(src, 0, dst, 0, 1);
+        return new Point(dst[0], dst[1]);
+    }
+
+    private List<Point> flattenCubic(Point p0, Point p1, Point p2, Point p3, int segments) {
+        int effectiveSegments = Math.max(1, segments);
+        List<Point> points = new ArrayList<>(effectiveSegments + 1);
+        points.add(p0);
+
+        for (int i = 1; i <= effectiveSegments; i++) {
+            double t = (double) i / effectiveSegments;
+            double oneMinusT = 1.0 - t;
+
+            double x =
+                    (oneMinusT * oneMinusT * oneMinusT * p0.x())
+                            + (3.0 * oneMinusT * oneMinusT * t * p1.x())
+                            + (3.0 * oneMinusT * t * t * p2.x())
+                            + (t * t * t * p3.x());
+
+            double y =
+                    (oneMinusT * oneMinusT * oneMinusT * p0.y())
+                            + (3.0 * oneMinusT * oneMinusT * t * p1.y())
+                            + (3.0 * oneMinusT * t * t * p2.y())
+                            + (t * t * t * p3.y());
+
+            points.add(new Point(x, y));
+        }
+
+        return points;
+    }
+
+    private List<Point> flattenQuadratic(Point p0, Point p1, Point p2, int segments) {
+        int effectiveSegments = Math.max(1, segments);
+        List<Point> points = new ArrayList<>(effectiveSegments + 1);
+        points.add(p0);
+
+        for (int i = 1; i <= effectiveSegments; i++) {
+            double t = (double) i / effectiveSegments;
+            double oneMinusT = 1.0 - t;
+
+            double x =
+                    (oneMinusT * oneMinusT * p0.x())
+                            + (2.0 * oneMinusT * t * p1.x())
+                            + (t * t * p2.x());
+
+            double y =
+                    (oneMinusT * oneMinusT * p0.y())
+                            + (2.0 * oneMinusT * t * p1.y())
+                            + (t * t * p2.y());
+
+            points.add(new Point(x, y));
+        }
+
+        return points;
+    }
+
+    private List<Point> flattenArc(
+            Point start,
+            double rx,
+            double ry,
+            double xAxisRotationDegrees,
+            boolean largeArcFlag,
+            boolean sweepFlag,
+            Point end,
+            int segments) {
+
+        if (start.equals(end)) {
+            return List.of(start, end);
+        }
+
+        double absRx = Math.abs(rx);
+        double absRy = Math.abs(ry);
+
+        if (absRx == 0.0 || absRy == 0.0) {
+            return List.of(start, end);
+        }
+
+        double phi = Math.toRadians(xAxisRotationDegrees % 360.0);
+        double cosPhi = Math.cos(phi);
+        double sinPhi = Math.sin(phi);
+
+        double dx2 = (start.x() - end.x()) / 2.0;
+        double dy2 = (start.y() - end.y()) / 2.0;
+
+        double x1Prime = cosPhi * dx2 + sinPhi * dy2;
+        double y1Prime = -sinPhi * dx2 + cosPhi * dy2;
+
+        double rxSq = absRx * absRx;
+        double rySq = absRy * absRy;
+        double x1PrimeSq = x1Prime * x1Prime;
+        double y1PrimeSq = y1Prime * y1Prime;
+
+        double lambda = (x1PrimeSq / rxSq) + (y1PrimeSq / rySq);
+        if (lambda > 1.0) {
+            double scale = Math.sqrt(lambda);
+            absRx *= scale;
+            absRy *= scale;
+            rxSq = absRx * absRx;
+            rySq = absRy * absRy;
+        }
+
+        double numerator = (rxSq * rySq) - (rxSq * y1PrimeSq) - (rySq * x1PrimeSq);
+        double denominator = (rxSq * y1PrimeSq) + (rySq * x1PrimeSq);
+
+        double factor;
+        if (denominator == 0.0) {
+            factor = 0.0;
+        } else {
+            double signed = Math.max(0.0, numerator / denominator);
+            factor = Math.sqrt(signed);
+            if (largeArcFlag == sweepFlag) {
+                factor = -factor;
+            }
+        }
+
+        double cxPrime = factor * ((absRx * y1Prime) / absRy);
+        double cyPrime = factor * (-(absRy * x1Prime) / absRx);
+
+        double centerX =
+                cosPhi * cxPrime - sinPhi * cyPrime + ((start.x() + end.x()) / 2.0);
+        double centerY =
+                sinPhi * cxPrime + cosPhi * cyPrime + ((start.y() + end.y()) / 2.0);
+
+        double ux = (x1Prime - cxPrime) / absRx;
+        double uy = (y1Prime - cyPrime) / absRy;
+        double vx = (-x1Prime - cxPrime) / absRx;
+        double vy = (-y1Prime - cyPrime) / absRy;
+
+        double theta1 = angleBetween(1.0, 0.0, ux, uy);
+        double deltaTheta = angleBetween(ux, uy, vx, vy);
+
+        if (!sweepFlag && deltaTheta > 0.0) {
+            deltaTheta -= Math.PI * 2.0;
+        } else if (sweepFlag && deltaTheta < 0.0) {
+            deltaTheta += Math.PI * 2.0;
+        }
+
+        int effectiveSegments = Math.max(1, segments);
+        List<Point> points = new ArrayList<>(effectiveSegments + 1);
+        points.add(start);
+
+        for (int i = 1; i <= effectiveSegments; i++) {
+            double t = (double) i / effectiveSegments;
+            double angle = theta1 + (deltaTheta * t);
+
+            double cosAngle = Math.cos(angle);
+            double sinAngle = Math.sin(angle);
+
+            double x =
+                    centerX
+                            + (absRx * cosPhi * cosAngle)
+                            - (absRy * sinPhi * sinAngle);
+            double y =
+                    centerY
+                            + (absRx * sinPhi * cosAngle)
+                            + (absRy * cosPhi * sinAngle);
+
+            points.add(new Point(x, y));
+        }
+
+        points.set(points.size() - 1, end);
+        return points;
+    }
+
+    private double angleBetween(double ux, double uy, double vx, double vy) {
+        double dot = (ux * vx) + (uy * vy);
+        double lengths = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+
+        if (lengths == 0.0) {
+            return 0.0;
+        }
+
+        double value = Math.max(-1.0, Math.min(1.0, dot / lengths));
+        double angle = Math.acos(value);
+
+        double cross = (ux * vy) - (uy * vx);
+        return cross < 0.0 ? -angle : angle;
+    }
+
+    private Point reflect(Point control, Point around) {
+        return new Point(
+                (2.0 * around.x()) - control.x(),
+                (2.0 * around.y()) - control.y()
+        );
+    }
+
+    private double parseLength(String value, double defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+
+        Matcher matcher = LENGTH_NUMBER_PATTERN.matcher(value.trim());
+        if (!matcher.find()) {
+            return defaultValue;
+        }
+
+        return Double.parseDouble(matcher.group());
+    }
+
+    private double[] parseNumberList(String value) {
+        if (value == null || value.isBlank()) {
+            return new double[0];
+        }
+
+        Matcher matcher = LENGTH_NUMBER_PATTERN.matcher(value);
+        List<Double> numbers = new ArrayList<>();
+        while (matcher.find()) {
+            numbers.add(Double.parseDouble(matcher.group()));
+        }
+
+        double[] result = new double[numbers.size()];
+        for (int i = 0; i < numbers.size(); i++) {
+            result[i] = numbers.get(i);
+        }
+        return result;
+    }
+
+    private String format(double value) {
+        if (value == -0.0d) {
+            value = 0.0d;
+        }
+        return String.format(Locale.ROOT, "%.6f", value);
+    }
+
+    private void resetBounds() {
+        width = 0.0;
+        height = 0.0;
+        minX = Double.POSITIVE_INFINITY;
+        minY = Double.POSITIVE_INFINITY;
+        maxX = Double.NEGATIVE_INFINITY;
+        maxY = Double.NEGATIVE_INFINITY;
+    }
+
+    private void updateBounds(Point point) {
+        minX = Math.min(minX, point.x());
+        minY = Math.min(minY, point.y());
+        maxX = Math.max(maxX, point.x());
+        maxY = Math.max(maxY, point.y());
+    }
+
+    private record SvgViewport(double width, double height, AffineTransform viewBoxTransform) { }
+
+    private record Point(double x, double y) {
+        Point add(double dx, double dy) {
+            return new Point(x + dx, y + dy);
+        }
+    }
+
+    private static final class PathTokenizer {
+        private final List<String> tokens;
+        private int index;
+
+        PathTokenizer(String pathData) {
+            Objects.requireNonNull(pathData, "pathData must not be null");
+
+            Matcher matcher = PATH_TOKEN_PATTERN.matcher(pathData);
+            List<String> parsedTokens = new ArrayList<>();
+            while (matcher.find()) {
+                parsedTokens.add(matcher.group());
+            }
+
+            this.tokens = List.copyOf(parsedTokens);
+            this.index = 0;
+        }
+
+        boolean hasNext() {
+            return index < tokens.size();
+        }
+
+        boolean peekIsCommand() {
+            return hasNext() && isCommand(tokens.get(index));
+        }
+
+        boolean hasNextNumber() {
+            return hasNext() && !peekIsCommand();
+        }
+
+        char nextCommand() {
+            if (!peekIsCommand()) {
+                throw new IllegalArgumentException("Pfadbefehl erwartet an Position " + index + ".");
+            }
+            return tokens.get(index++).charAt(0);
+        }
+
+        double nextNumber() {
+            if (!hasNextNumber()) {
+                throw new IllegalArgumentException("Zahl erwartet an Position " + index + ".");
+            }
+            return Double.parseDouble(tokens.get(index++));
+        }
+
+        int nextFlag() {
+            double value = nextNumber();
+            if (value == 0.0d) {
+                return 0;
+            }
+            if (value == 1.0d) {
+                return 1;
+            }
+            throw new IllegalArgumentException("Arc-Flag muss 0 oder 1 sein, war aber: " + value);
+        }
+
+        private boolean isCommand(String token) {
+            return token.length() == 1
+                    && "AaCcHhLlMmQqSsTtVvZz".indexOf(token.charAt(0)) >= 0;
+        }
+    }
+}	
